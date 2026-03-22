@@ -1,8 +1,6 @@
 # ClawDone
 
-<p align="center">
-  <img src="assets/logo.png" alt="ClawDone logo" width="144">
-</p>
+![ClawDone logo](assets/logo.png)
 
 [简体中文](README.zh-CN.md)
 
