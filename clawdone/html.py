@@ -223,12 +223,44 @@ INDEX_HTML = """<!doctype html>
     }
     .target-card {
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 10px 12px;
+      border-radius: 16px;
+      padding: 12px 13px;
       background: rgba(15, 23, 42, 0.62);
       color: var(--foreground);
       text-align: left;
       transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
+    }
+    .target-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .target-card-name {
+      display: grid;
+      gap: 4px;
+      min-width: 0;
+    }
+    .target-card-name strong {
+      font-size: 0.95rem;
+      line-height: 1.2;
+    }
+    .target-card-host {
+      color: var(--muted-foreground);
+      font-size: 0.8rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .target-card-foot {
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted-foreground);
+      font-size: 0.78rem;
     }
     .target-card:hover {
       border-color: #475569;
@@ -697,18 +729,19 @@ INDEX_HTML = """<!doctype html>
     .message-body {
       max-width: min(100%, 760px);
       padding: 14px 16px;
-      border-radius: 20px;
-      border: 1px solid rgba(51, 65, 85, 0.85);
+      border-radius: 18px;
+      border: 1px solid rgba(51, 65, 85, 0.8);
       white-space: pre-wrap;
       word-break: break-word;
       line-height: 1.58;
-      box-shadow: 0 16px 40px rgba(2, 6, 23, 0.14);
+      box-shadow: 0 10px 24px rgba(2, 6, 23, 0.12);
     }
     .message.user .message-body {
       background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
       border-color: rgba(96, 165, 250, 0.62);
       color: #eff6ff;
       border-bottom-right-radius: 8px;
+      max-width: min(88%, 640px);
     }
     .message.agent .message-body {
       background: rgba(17, 24, 39, 0.95);
@@ -716,6 +749,7 @@ INDEX_HTML = """<!doctype html>
       border-bottom-left-radius: 8px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
       font-size: 0.84rem;
+      max-width: min(92%, 760px);
     }
     .composer {
       display: grid;
@@ -765,20 +799,22 @@ INDEX_HTML = """<!doctype html>
     }
     .thread-card {
       width: 100%;
-      border: 0;
-      border-radius: 12px;
-      padding: 10px 10px;
-      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 14px;
+      padding: 11px 12px;
+      background: rgba(11, 18, 34, 0.24);
       color: var(--foreground);
       text-align: left;
-      transition: background-color 120ms ease, color 120ms ease;
+      transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
       box-shadow: none;
     }
     .thread-card:hover {
       background: rgba(30, 41, 59, 0.42);
+      border-color: rgba(71, 85, 105, 0.7);
     }
     .thread-card.active {
       background: rgba(37, 99, 235, 0.16);
+      border-color: rgba(96, 165, 250, 0.5);
       color: #e5eefc;
     }
     .thread-title {
@@ -799,20 +835,22 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: 40px minmax(0, 1fr);
       align-items: center;
       gap: 10px;
-      min-height: 56px;
-      padding: 8px 10px;
-      border: 0;
+      min-height: 58px;
+      padding: 9px 10px;
+      border: 1px solid transparent;
       border-radius: 14px;
-      background: transparent;
+      background: rgba(11, 18, 34, 0.2);
       color: var(--foreground);
       text-align: left;
       box-shadow: none;
     }
     .worker-chip:hover {
       background: rgba(30, 41, 59, 0.42);
+      border-color: rgba(71, 85, 105, 0.65);
     }
     .worker-chip.active {
       background: rgba(37, 99, 235, 0.16);
+      border-color: rgba(96, 165, 250, 0.5);
       color: #e5eefc;
     }
     .worker-avatar {
@@ -904,8 +942,142 @@ INDEX_HTML = """<!doctype html>
       border-color: rgba(59, 130, 246, 0.38);
       color: #dbeafe;
     }
+    body {
+      background:
+        radial-gradient(900px 280px at 50% -180px, rgba(59, 130, 246, 0.14), rgba(59, 130, 246, 0) 62%),
+        linear-gradient(180deg, #030712 0%, #0a1120 100%);
+    }
+    .wrap {
+      width: min(1080px, 100%);
+      padding: 20px 16px 72px;
+    }
+    .hero {
+      margin-bottom: 10px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+    }
+    .hero-meta {
+      display: grid;
+      gap: 8px;
+      align-content: start;
+      min-width: min(260px, 100%);
+    }
+    .hero-note {
+      padding: 10px 12px;
+      border: 1px solid rgba(51, 65, 85, 0.7);
+      border-radius: 14px;
+      background: rgba(11, 18, 34, 0.5);
+      color: var(--muted-foreground);
+      font-size: 0.82rem;
+      line-height: 1.5;
+    }
+    .action-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .action-strip > button {
+      width: auto;
+      flex: 1 1 160px;
+    }
+    .stats-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .stats-grid.compact .kpi {
+      background: rgba(11, 18, 34, 0.48);
+    }
+    .workspace-grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: minmax(0, 1.05fr) minmax(300px, 0.95fr);
+      align-items: start;
+    }
+    .panel-stack,
+    .settings-shell,
+    .todo-shell,
+    .delivery-shell,
+    .inspector-stack,
+    .support-list {
+      display: grid;
+      gap: 14px;
+    }
+    .settings-shell {
+      grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+      align-items: start;
+    }
+    .todo-shell,
+    .delivery-shell {
+      grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+      align-items: start;
+    }
+    .support-card {
+      gap: 10px;
+    }
+    .support-item {
+      padding: 12px 14px;
+      border: 1px solid rgba(51, 65, 85, 0.65);
+      border-radius: 14px;
+      background: rgba(11, 18, 34, 0.4);
+    }
+    .support-item strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 0.9rem;
+    }
+    .card,
+    .chat-sidebar,
+    .chat-main {
+      background: rgba(9, 14, 27, 0.82);
+      border-color: rgba(51, 65, 85, 0.7);
+      border-radius: 18px;
+      box-shadow: 0 8px 22px rgba(2, 6, 23, 0.2);
+    }
+    .kpi {
+      background: rgba(11, 18, 34, 0.54);
+      padding: 14px;
+    }
+    .target-card,
+    .list-item,
+    .todo-lane,
+    .todo-bar {
+      background: rgba(11, 18, 34, 0.52);
+      box-shadow: none;
+    }
+    details.fold {
+      background: rgba(11, 18, 34, 0.42);
+      border-color: rgba(51, 65, 85, 0.7);
+    }
+    details.fold.fold-panel {
+      background: rgba(9, 14, 27, 0.36);
+    }
+    .chatbot-layout {
+      grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);
+      gap: 12px;
+    }
+    .chat-sidebar {
+      gap: 8px;
+      padding: 14px 14px 12px;
+    }
+    .chat-main {
+      min-height: 680px;
+    }
+    .chat-main-header,
+    .composer {
+      padding-left: 16px;
+      padding-right: 16px;
+    }
+    .chat-feed {
+      padding: 16px;
+    }
+    .tabbar {
+      width: min(680px, calc(100% - 24px));
+      background: rgba(6, 11, 23, 0.92);
+      box-shadow: 0 10px 24px rgba(2, 6, 23, 0.26);
+    }
     @media (max-width: 900px) {
-      .main-grid, .grid-2, .grid-3, .grid-4, .chatbot-layout { grid-template-columns: 1fr; }
+      .main-grid, .grid-2, .grid-3, .grid-4, .chatbot-layout, .workspace-grid, .settings-shell, .todo-shell, .delivery-shell, .stats-grid, .hero { grid-template-columns: 1fr; }
       .row-inline {
         flex-direction: column;
         align-items: stretch;
@@ -945,24 +1117,28 @@ INDEX_HTML = """<!doctype html>
         <img class="brand-logo" src="/assets/logo.png" alt="ClawDone logo">
         <div class="brand-copy">
           <h1>ClawDone</h1>
-          <p class="sub">Mobile-first remote control for tmux sessions, Codex workers, TODO orchestration, and delivery tracking.</p>
+          <p class="sub">A mobile control surface for remote tmux panes, coding agents, lightweight task routing, and delivery review.</p>
         </div>
+      </div>
+      <div class="hero-meta">
+        <div class="pill">Remote agent console</div>
+        <div class="hero-note">Start with a target, bind to a pane, then move into work, tasks, or delivery without leaving your phone.</div>
       </div>
     </section>
 
     <section class="card grid">
-      <div class="section-title"><h2>Dashboard</h2><span class="hint">Targets, sessions, panes, and live status</span></div>
-      <div class="row-inline">
+      <div class="section-title"><h2>Overview</h2><span class="hint">Current fleet status and routing metrics</span></div>
+      <div class="action-strip">
         <button class="secondary" id="refreshDashboard">Refresh dashboard</button>
         <button class="ghost" id="refreshState">Refresh selected target</button>
       </div>
-      <div class="grid-4">
+      <div class="stats-grid">
         <div class="kpi"><strong id="profileCount">0</strong><span>Targets</span></div>
         <div class="kpi"><strong id="onlineCount">0</strong><span>Online</span></div>
         <div class="kpi"><strong id="sessionCount">0</strong><span>Sessions</span></div>
         <div class="kpi"><strong id="paneCount">0</strong><span>Agent panes</span></div>
       </div>
-      <div class="grid-4">
+      <div class="stats-grid compact">
         <div class="kpi"><strong id="dispatchMetric">-</strong><span>T_dispatch (sec)</span></div>
         <div class="kpi"><strong id="doneMetric">-</strong><span>T_done (sec)</span></div>
         <div class="kpi"><strong id="verifyMetric">-</strong><span>T_verify (sec)</span></div>
@@ -971,24 +1147,22 @@ INDEX_HTML = """<!doctype html>
       <div id="status" class="status"></div>
     </section>
 
-    <section class="main-grid">
-      <div class="grid">
-        <details class="card grid fold fold-panel" data-fold-key="dashboard-targets" open>
-          <summary><div class="fold-head"><strong>Targets</strong><span>Saved SSH targets</span></div></summary>
-          <div class="fold-body">
-            <div>
-              <label for="profileSelect">Saved target</label>
-              <select id="profileSelect"></select>
-            </div>
-            <div id="targetList" class="list"></div>
-            <div class="pagination" id="targetPagination"></div>
+    <section class="workspace-grid">
+      <details class="card grid fold fold-panel" data-fold-key="dashboard-targets" open>
+        <summary><div class="fold-head"><strong>Targets</strong><span>Choose a machine first</span></div></summary>
+        <div class="fold-body">
+          <div>
+            <label for="profileSelect">Saved target</label>
+            <select id="profileSelect"></select>
           </div>
-        </details>
-      </div>
+          <div id="targetList" class="list"></div>
+          <div class="pagination" id="targetPagination"></div>
+        </div>
+      </details>
 
-      <div class="grid">
+      <div class="panel-stack">
         <details class="card grid fold fold-panel" data-fold-key="dashboard-pane" open>
-          <summary><div class="fold-head"><strong>Pane</strong><span>Session, window, and alias</span></div></summary>
+          <summary><div class="fold-head"><strong>Pane</strong><span>Lock onto the agent you want to drive</span></div></summary>
           <div class="fold-body">
             <div class="grid-3">
               <div>
@@ -1009,7 +1183,7 @@ INDEX_HTML = """<!doctype html>
                 <label for="agentAlias">Pane alias</label>
                 <input id="agentAlias" placeholder="backend-agent">
               </div>
-              <div class="row-inline">
+              <div class="action-strip">
                 <button class="secondary" id="saveAlias">Save alias</button>
                 <button class="ghost" id="refreshPane">Refresh output</button>
               </div>
@@ -1017,6 +1191,14 @@ INDEX_HTML = """<!doctype html>
           </div>
         </details>
 
+        <section class="card support-card">
+          <div class="section-title"><h2>Flow</h2><span class="hint">Suggested operating sequence</span></div>
+          <div class="support-list">
+            <div class="support-item"><strong>1. Select target</strong><span class="hint">Choose the machine that hosts the agent session you need.</span></div>
+            <div class="support-item"><strong>2. Select pane</strong><span class="hint">Bind the current session, window, and pane before issuing commands.</span></div>
+            <div class="support-item"><strong>3. Switch tabs</strong><span class="hint">Use Work for commands, Tasks for todo tracking, and Delivery for review.</span></div>
+          </div>
+        </section>
       </div>
     </section>
     </div>
@@ -1024,7 +1206,7 @@ INDEX_HTML = """<!doctype html>
     <div class="page-view" id="view-auth">
     <section class="card grid">
       <div class="section-title"><h2>Settings</h2><span class="hint">Access token, UI preferences, and SSH target settings</span></div>
-      <div class="fold-body settings-grid">
+      <div class="settings-shell">
         <details class="fold fold-panel" data-fold-key="settings-access" open>
           <summary><div class="fold-head"><strong>Access & View</strong><span>Browser-only preferences</span></div></summary>
           <div class="fold-body settings-card">
@@ -1182,11 +1364,11 @@ INDEX_HTML = """<!doctype html>
     <section class="chatbot-layout">
       <aside class="chat-sidebar">
         <div class="chatbot-sidebar-header">
-          <h2>Chats</h2>
-
+          <h2>Work</h2>
+          <div class="hint">A lighter command view for the currently selected agent.</div>
         </div>
         <div class="chatbot-agent-card">
-          <div class="chatbot-sidebar-title">Selected</div>
+          <div class="chatbot-sidebar-title">Active agent</div>
           <strong id="currentAgentLabel">No pane selected</strong>
           <span id="currentAgentHint">Select a pane.</span>
         </div>
@@ -1197,10 +1379,10 @@ INDEX_HTML = """<!doctype html>
         <div class="chatbot-sidebar-panel">
           <label for="chatSessionSelect">Session</label>
           <select id="chatSessionSelect"></select>
-          <div class="hint" id="chatConversationHint">Pick a thread.</div>
+          <div class="hint" id="chatConversationHint">Choose a thread to focus the feed.</div>
         </div>
         <div class="chatbot-sidebar-panel">
-          <div class="chatbot-sidebar-title">Chats</div>
+          <div class="chatbot-sidebar-title">Threads</div>
           <div id="conversationList" class="thread-list"></div>
         </div>
       </aside>
@@ -1208,7 +1390,7 @@ INDEX_HTML = """<!doctype html>
       <section class="chat-main">
         <div class="chat-main-header">
           <div>
-            <h2>Codex</h2>
+            <h2>Command stream</h2>
             <span class="hint" id="selectedPaneLabel">No pane selected</span>
           </div>
           <div class="chat-main-actions">
@@ -1223,7 +1405,7 @@ INDEX_HTML = """<!doctype html>
           <div class="composer-head">
             <label for="command">Message</label>
           </div>
-          <textarea id="command" class="chat-input" placeholder="像微信发消息一样告诉 Codex：先分析问题，再修复，跑测试，最后总结变更"></textarea>
+          <textarea id="command" class="chat-input" placeholder="Describe the next step for the selected agent. Example: analyze the bug, patch it, run tests, then summarize the changes."></textarea>
           <div class="composer-actions">
             <div class="row-inline">
               <button class="primary" id="sendCommand">Send</button>
@@ -1238,154 +1420,164 @@ INDEX_HTML = """<!doctype html>
     </div>
 
     <div class="page-view" id="view-todo">
-    <section class="card grid">
-      <div class="section-title"><h2>TODO</h2><span class="hint">Create and manage tasks for the current agent.</span></div>
-      <div>
-        <label for="todoDetail">需求内容</label>
-        <textarea id="todoDetail" placeholder="比如：修复登录接口 500 问题，并补一条回归测试。
-也可以直接写更完整的需求、约束和验收标准。"></textarea>
-      </div>
-      <div class="grid-2">
-        <button class="primary" id="createTodo">发送需求给当前 agent</button>
-        <button class="secondary" id="refreshTodos">刷新需求列表</button>
-      </div>
-      <details class="fold fold-panel" data-fold-key="todo-list" open>
-        <summary><div class="fold-head"><strong>Task Bars</strong></div></summary>
-        <div class="fold-body">
-          <select id="todoSelect" class="hidden-select"></select>
-          <div id="todoBoard" class="todo-board"></div>
-          <div class="pagination" id="todoPagination" style="display:none"></div>
-          <div class="hint" id="todoMeta">No tasks yet.</div>
+    <section class="todo-shell">
+      <section class="card todo-compose">
+        <div class="section-title"><h2>Tasks</h2><span class="hint">Create work items for the current agent.</span></div>
+        <div>
+          <label for="todoDetail">Task brief</label>
+          <textarea id="todoDetail" placeholder="Describe the task, constraints, and acceptance criteria for the current agent."></textarea>
         </div>
-      </details>
-      <details class="fold fold-panel" data-fold-key="todo-advanced">
-        <summary><div class="fold-head"><strong>Advanced</strong></div></summary>
-        <div class="fold-body">
-          <div class="grid-3">
-            <div>
-              <label for="todoTitle">需求标题</label>
-              <input id="todoTitle" placeholder="自动从需求首行生成，也可手动覆盖">
-            </div>
-            <div>
-              <label for="todoPriority">优先级</label>
-              <select id="todoPriority">
-                <option value="low">low</option>
-                <option value="medium" selected>medium</option>
-                <option value="high">high</option>
-                <option value="urgent">urgent</option>
-              </select>
-            </div>
-            <div>
-              <label for="todoAssignee">Assignee</label>
-              <input id="todoAssignee" placeholder="backend-agent">
-            </div>
-          </div>
-          <div class="grid-4">
-            <button class="secondary" id="quickTodo">Quick task</button>
-            <button class="secondary" id="createTriplet">Triplet workflow</button>
-            <button class="secondary" id="applyTodoToCommand">Use todo in command</button>
-            <button class="secondary" id="updateTodoStatus">Update status</button>
-          </div>
-          <div class="grid-2">
-            <div>
-              <label for="todoStatus">Status</label>
-              <select id="todoStatus">
-                <option value="todo">todo</option>
-                <option value="in_progress">in_progress</option>
-                <option value="done">done</option>
-                <option value="verified">verified</option>
-                <option value="blocked">blocked</option>
-              </select>
-            </div>
-            <div>
-              <label for="todoProgressNote">Progress note</label>
-              <input id="todoProgressNote" placeholder="what changed in this step">
-            </div>
-          </div>
-          <div>
-            <label for="todoEvidence">Evidence (text or JSON)</label>
-            <textarea id="todoEvidence" placeholder='Text note, or JSON like {"type":"pane_output","content":"tests passed"}'></textarea>
-          </div>
-          <div class="grid-4">
-            <button class="secondary" id="addTodoEvidence">Add evidence</button>
-            <button class="ghost" id="reportTodo">Agent report</button>
-            <button class="secondary" id="applyTodoTemplate">Apply template</button>
-            <button class="secondary" id="saveTodoTemplate">Save template</button>
-          </div>
-          <div class="grid-3">
-            <div>
-              <label for="todoTemplateSelect">Todo template</label>
-              <select id="todoTemplateSelect"></select>
-            </div>
-            <div>
-              <label for="todoTemplateName">Template name</label>
-              <input id="todoTemplateName" placeholder="Bugfix task template">
-            </div>
-            <div class="row-inline">
-              <button class="danger" id="deleteTodoTemplate">Delete template</button>
-            </div>
-          </div>
-          <div class="grid-2">
-            <div>
-              <label for="todoTimeline">Todo timeline</label>
-              <pre id="todoTimeline">No todo selected.</pre>
-            </div>
-            <div>
-              <label for="todoEvidenceList">Evidence list</label>
-              <pre id="todoEvidenceList">No evidence yet.</pre>
-            </div>
-          </div>
-          <div>
-            <label for="auditSelect">Recent audit events (current agent)</label>
-            <select id="auditSelect"></select>
-          </div>
+        <div class="grid-2">
+          <button class="primary" id="createTodo">Create task for current agent</button>
+          <button class="secondary" id="refreshTodos">Refresh task list</button>
         </div>
-      </details>
+        <details class="fold fold-panel" data-fold-key="todo-list" open>
+          <summary><div class="fold-head"><strong>Task board</strong><span>Active work grouped by agent thread</span></div></summary>
+          <div class="fold-body">
+            <div id="todoBoard" class="todo-board"></div>
+            <div class="pagination" id="todoPagination" style="display:none"></div>
+          </div>
+        </details>
+      </section>
+
+      <section class="card inspector-stack">
+        <div class="section-title"><h2>Inspector</h2><span class="hint">Selected task details, evidence, and reusable actions</span></div>
+        <select id="todoSelect" class="hidden-select"></select>
+        <div class="hint" id="todoMeta">No tasks yet.</div>
+        <details class="fold fold-panel" data-fold-key="todo-advanced" open>
+          <summary><div class="fold-head"><strong>Task details</strong><span>Status, evidence, and templates</span></div></summary>
+          <div class="fold-body">
+            <div class="grid-3">
+              <div>
+                <label for="todoTitle">Title</label>
+                <input id="todoTitle" placeholder="Override the title if needed">
+              </div>
+              <div>
+                <label for="todoPriority">Priority</label>
+                <select id="todoPriority">
+                  <option value="low">low</option>
+                  <option value="medium" selected>medium</option>
+                  <option value="high">high</option>
+                  <option value="urgent">urgent</option>
+                </select>
+              </div>
+              <div>
+                <label for="todoAssignee">Assignee</label>
+                <input id="todoAssignee" placeholder="backend-agent">
+              </div>
+            </div>
+            <div class="grid-2">
+              <div>
+                <label for="todoStatus">Status</label>
+                <select id="todoStatus">
+                  <option value="todo">todo</option>
+                  <option value="in_progress">in_progress</option>
+                  <option value="done">done</option>
+                  <option value="verified">verified</option>
+                  <option value="blocked">blocked</option>
+                </select>
+              </div>
+              <div>
+                <label for="todoProgressNote">Progress note</label>
+                <input id="todoProgressNote" placeholder="What changed in this step?">
+              </div>
+            </div>
+            <div class="action-strip">
+              <button class="secondary" id="quickTodo">Quick task</button>
+              <button class="secondary" id="createTriplet">Triplet workflow</button>
+              <button class="secondary" id="applyTodoToCommand">Use in command</button>
+              <button class="secondary" id="updateTodoStatus">Update status</button>
+            </div>
+            <div>
+              <label for="todoEvidence">Evidence (text or JSON)</label>
+              <textarea id="todoEvidence" placeholder='Text note, or JSON like {"type":"pane_output","content":"tests passed"}'></textarea>
+            </div>
+            <div class="action-strip">
+              <button class="secondary" id="addTodoEvidence">Add evidence</button>
+              <button class="ghost" id="reportTodo">Agent report</button>
+              <button class="secondary" id="applyTodoTemplate">Apply template</button>
+              <button class="secondary" id="saveTodoTemplate">Save template</button>
+            </div>
+            <div class="grid-3">
+              <div>
+                <label for="todoTemplateSelect">Template</label>
+                <select id="todoTemplateSelect"></select>
+              </div>
+              <div>
+                <label for="todoTemplateName">Template name</label>
+                <input id="todoTemplateName" placeholder="Bugfix task template">
+              </div>
+              <div class="action-strip">
+                <button class="danger" id="deleteTodoTemplate">Delete template</button>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div>
+                <label for="todoTimeline">Timeline</label>
+                <pre id="todoTimeline">No todo selected.</pre>
+              </div>
+              <div>
+                <label for="todoEvidenceList">Evidence</label>
+                <pre id="todoEvidenceList">No evidence yet.</pre>
+              </div>
+            </div>
+            <div>
+              <label for="auditSelect">Recent audit events (current agent)</label>
+              <select id="auditSelect"></select>
+            </div>
+          </div>
+        </details>
+      </section>
     </section>
     </div>
 
     <div class="page-view" id="view-delivery">
-    <section class="card grid">
-      <div class="section-title"><h2>Delivery</h2><span class="hint">Summary of the current agent, todo, evidence, and output</span></div>
-      <div class="kpi">
-        <strong id="deliveryAgentLabel">No pane selected</strong>
-        <span id="deliveryAgentHint"></span>
-      </div>
-      <div class="hint" id="deliveryTodoMeta">No todo selected.</div>
-      <details class="fold fold-panel" data-fold-key="delivery-summary" open>
-        <summary><div class="fold-head"><strong>Summary</strong><span>Timeline and evidence</span></div></summary>
-        <div class="fold-body grid-2">
-          <div>
-            <label for="deliveryTimeline">Timeline</label>
-            <pre id="deliveryTimeline">No todo selected.</pre>
-          </div>
-          <div>
-            <label for="deliveryEvidence">Evidence</label>
-            <pre id="deliveryEvidence">No evidence yet.</pre>
-          </div>
+    <section class="delivery-shell">
+      <section class="card grid">
+        <div class="section-title"><h2>Delivery</h2><span class="hint">Review the selected agent, task status, timeline, and evidence.</span></div>
+        <div class="kpi">
+          <strong id="deliveryAgentLabel">No pane selected</strong>
+          <span id="deliveryAgentHint"></span>
         </div>
-      </details>
-      <details class="fold fold-panel" data-fold-key="delivery-output">
-        <summary><div class="fold-head"><strong>Output</strong><span>Audit and pane snapshot</span></div></summary>
-        <div class="fold-body">
-          <div>
-            <label for="deliveryAudit">Recent audit events</label>
-            <pre id="deliveryAudit">No audit events.</pre>
+        <div class="hint" id="deliveryTodoMeta">No todo selected.</div>
+        <details class="fold fold-panel" data-fold-key="delivery-summary" open>
+          <summary><div class="fold-head"><strong>Summary</strong><span>Timeline and evidence</span></div></summary>
+          <div class="fold-body grid-2">
+            <div>
+              <label for="deliveryTimeline">Timeline</label>
+              <pre id="deliveryTimeline">No todo selected.</pre>
+            </div>
+            <div>
+              <label for="deliveryEvidence">Evidence</label>
+              <pre id="deliveryEvidence">No evidence yet.</pre>
+            </div>
           </div>
-          <div>
-            <label for="deliveryPaneOutput">Current delivery snapshot</label>
-            <pre id="deliveryPaneOutput">Choose a target first.</pre>
+        </details>
+      </section>
+      <section class="card grid">
+        <div class="section-title"><h2>Snapshot</h2><span class="hint">Recent audit activity and pane output</span></div>
+        <details class="fold fold-panel" data-fold-key="delivery-output" open>
+          <summary><div class="fold-head"><strong>Output</strong><span>Audit and pane snapshot</span></div></summary>
+          <div class="fold-body">
+            <div>
+              <label for="deliveryAudit">Recent audit events</label>
+              <pre id="deliveryAudit">No audit events.</pre>
+            </div>
+            <div>
+              <label for="deliveryPaneOutput">Current delivery snapshot</label>
+              <pre id="deliveryPaneOutput">Choose a target first.</pre>
+            </div>
           </div>
-        </div>
-      </details>
+        </details>
+      </section>
     </section>
     </div>
 
     <nav class="tabbar" aria-label="Primary">
-      <button class="tab-button" type="button" data-view-button="chat">Chat</button>
-      <button class="tab-button" type="button" data-view-button="todo">TODO</button>
+      <button class="tab-button" type="button" data-view-button="chat">Work</button>
+      <button class="tab-button" type="button" data-view-button="todo">Tasks</button>
       <button class="tab-button" type="button" data-view-button="delivery">Delivery</button>
-      <button class="tab-button active" type="button" data-view-button="dashboard">Dashboard</button>
+      <button class="tab-button active" type="button" data-view-button="dashboard">Home</button>
       <button class="tab-button" type="button" data-view-button="auth">Settings</button>
     </nav>
 
@@ -2027,7 +2219,7 @@ INDEX_HTML = """<!doctype html>
       const alias = pane && pane.alias ? pane.alias : '(no alias)';
       const cmd = pane && pane.current_command ? pane.current_command : 'shell';
       const conversation = window ? currentWindowLabel(window) : 'no window';
-      currentAgentHintEl.textContent = `profile=${profile} · session=${session ? session.name : '-'} · conversation=${conversation} · worker=${alias} · cmd=${cmd}`;
+      currentAgentHintEl.textContent = `${profile} · ${session ? session.name : '-'} · ${conversation} · ${alias} · ${cmd}`;
       syncDeliveryView();
     }
 
@@ -2127,15 +2319,21 @@ INDEX_HTML = """<!doctype html>
         const inProgress = Number(todoSummary.in_progress_count || 0);
         const lastNote = String(todoSummary.last_note || '').trim();
         card.innerHTML = `
-          <div class="section-title"><strong>${target.favorite ? '★ ' : ''}${target.name}</strong><span class="muted">${target.host}</span></div>
-          <div class="badge-row">
+          <div class="target-card-head">
+            <div class="target-card-name">
+              <strong>${target.favorite ? '★ ' : ''}${escapeHtml(target.name)}</strong>
+              <span class="target-card-host">${escapeHtml(target.host || 'No host')}</span>
+            </div>
             <span class="badge ${target.online ? 'ok' : 'bad'}">${target.online ? 'Online' : 'Offline'}</span>
-            <span class="badge">${target.group || 'General'}</span>
+          </div>
+          <div class="badge-row">
+            <span class="badge">${escapeHtml(target.group || 'General')}</span>
             <span class="badge">${target.session_count} sessions</span>
             <span class="badge">${target.pane_count} panes</span>
-            <span class="badge">${inProgress} in-progress todos</span>
+            <span class="badge">${inProgress} active tasks</span>
           </div>
-          <div class="hint">${target.error ? target.error : (lastNote || target.description || target.tags.join(', ') || 'Ready')}</div>
+          <div class="hint">${escapeHtml(target.error ? target.error : (lastNote || target.description || target.tags.join(', ') || 'Ready'))}</div>
+          <div class="target-card-foot"><span>${escapeHtml((target.tags || []).slice(0, 3).join(' · ') || 'No tags')}</span><span>${target.online ? 'Available' : 'Needs attention'}</span></div>
         `;
         card.addEventListener('click', async () => {
           profileSelect.value = target.name;

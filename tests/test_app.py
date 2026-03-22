@@ -116,14 +116,14 @@ class RenderIndexHtmlTests(unittest.TestCase):
 
 class HtmlTests(unittest.TestCase):
     def test_tabbar_uses_buttons_without_navigation_href(self) -> None:
-        self.assertIn('<button class="tab-button active" type="button" data-view-button="dashboard">Dashboard</button>', INDEX_HTML)
+        self.assertIn('<button class="tab-button active" type="button" data-view-button="dashboard">Home</button>', INDEX_HTML)
         self.assertNotIn('href="/?view=dashboard"', INDEX_HTML)
 
     def test_chat_view_uses_chatbot_ui_style_layout(self) -> None:
         self.assertIn('<section class="chatbot-layout">', INDEX_HTML)
         self.assertIn('<aside class="chat-sidebar">', INDEX_HTML)
         self.assertIn('<section class="chat-main">', INDEX_HTML)
-        self.assertIn('<h2>Chats</h2>', INDEX_HTML)
+        self.assertIn('<h2>Work</h2>', INDEX_HTML)
         self.assertNotIn('Chatbot UI Inspired', INDEX_HTML)
         self.assertIn('data-fold-key="dashboard-targets"', INDEX_HTML)
         self.assertIn('data-fold-key="settings-access"', INDEX_HTML)
@@ -131,7 +131,7 @@ class HtmlTests(unittest.TestCase):
         self.assertIn('<div class="chatbot-sidebar-title">Agents</div>', INDEX_HTML)
         self.assertIn('class="worker-avatar"', INDEX_HTML)
         self.assertIn('id="todoBoard" class="todo-board"', INDEX_HTML)
-        self.assertIn('Task Bars', INDEX_HTML)
+        self.assertIn('Task board', INDEX_HTML)
         self.assertNotIn('Choose profile → session → window → pane first.', INDEX_HTML)
 
     def test_runtime_js_keeps_escaped_newline_sequences(self) -> None:
