@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from unittest.mock import patch
 
-from pocketclaw.app import (
+from clawdone.app import (
     ProfileStore,
     RemoteTmuxClient,
     SSHExecutor,
@@ -26,6 +26,9 @@ from pocketclaw.app import (
     normalize_config,
     normalize_profile,
 )
+from clawdone.html import INDEX_HTML
+from clawdone.web import render_index_html
+
 
 
 class DummyResult:
@@ -42,7 +45,7 @@ class DummyHandler:
         if auth is not None:
             self.headers["Authorization"] = auth
         if header_token is not None:
-            self.headers["X-PocketClaw-Token"] = header_token
+            self.headers["X-ClawDone-Token"] = header_token
         self.rfile = io.BytesIO()
 
 
@@ -101,6 +104,41 @@ class TmuxClientTests(unittest.TestCase):
         client = TmuxClient(runner=lambda *args, **kwargs: DummyResult())
         with self.assertRaises(ValueError):
             client.send_keys("codex", "")
+
+
+class RenderIndexHtmlTests(unittest.TestCase):
+    def test_render_index_html_marks_requested_view_on_buttons(self) -> None:
+        html = render_index_html('todo')
+        self.assertIn('<div class="page-view active" id="view-todo">', html)
+        self.assertIn('<button class="tab-button active" type="button" data-view-button="todo">', html)
+        self.assertNotIn('href="/?view=todo"', html)
+
+
+class HtmlTests(unittest.TestCase):
+    def test_tabbar_uses_buttons_without_navigation_href(self) -> None:
+        self.assertIn('<button class="tab-button active" type="button" data-view-button="dashboard">Dashboard</button>', INDEX_HTML)
+        self.assertNotIn('href="/?view=dashboard"', INDEX_HTML)
+
+    def test_chat_view_uses_chatbot_ui_style_layout(self) -> None:
+        self.assertIn('<section class="chatbot-layout">', INDEX_HTML)
+        self.assertIn('<aside class="chat-sidebar">', INDEX_HTML)
+        self.assertIn('<section class="chat-main">', INDEX_HTML)
+        self.assertIn('<h2>Chats</h2>', INDEX_HTML)
+        self.assertNotIn('Chatbot UI Inspired', INDEX_HTML)
+        self.assertIn('data-fold-key="dashboard-targets"', INDEX_HTML)
+        self.assertIn('data-fold-key="settings-access"', INDEX_HTML)
+        self.assertIn('data-fold-key="delivery-summary"', INDEX_HTML)
+        self.assertIn('<div class="chatbot-sidebar-title">Agents</div>', INDEX_HTML)
+        self.assertIn('class="worker-avatar"', INDEX_HTML)
+        self.assertIn('id="todoBoard" class="todo-board"', INDEX_HTML)
+        self.assertIn('Task Bars', INDEX_HTML)
+        self.assertNotIn('Choose profile → session → window → pane first.', INDEX_HTML)
+
+    def test_runtime_js_keeps_escaped_newline_sequences(self) -> None:
+        self.assertIn("split(/\\n+/)", INDEX_HTML)
+        self.assertIn("join('\\n')", INDEX_HTML)
+        self.assertIn("split('\\n')", INDEX_HTML)
+        self.assertIn("endsWith('\\n')", INDEX_HTML)
 
 
 class ProfileStoreTests(unittest.TestCase):
@@ -497,8 +535,8 @@ class SSHExecutorTests(unittest.TestCase):
 
     def test_ssh_executor_resolves_password_ref_from_env(self) -> None:
         executor = SSHExecutor()
-        with patch.dict(os.environ, {"POCKETCLAW_TEST_PWD": "secret-from-env"}, clear=False):
-            password = executor._resolve_profile_password({"password_ref": "env:POCKETCLAW_TEST_PWD"})
+        with patch.dict(os.environ, {"CLAWDONE_TEST_PWD": "secret-from-env"}, clear=False):
+            password = executor._resolve_profile_password({"password_ref": "env:CLAWDONE_TEST_PWD"})
         self.assertEqual(password, "secret-from-env")
 
 
@@ -841,7 +879,7 @@ class WebIntegrationTests(unittest.TestCase):
                 pane = self._request_json(
                     "http://127.0.0.1:8894/api/pane?profile=office&target=codex%3A0.0",
                     token=None,
-                    extra_headers={"X-PocketClaw-Share-Token": share_token},
+                    extra_headers={"X-ClawDone-Share-Token": share_token},
                 )
                 self.assertEqual(pane["output"], "ready")
 
@@ -850,7 +888,7 @@ class WebIntegrationTests(unittest.TestCase):
                     token=None,
                     method="POST",
                     body={"profile": "office", "target": "codex:0.0", "command": "echo hi", "press_enter": True},
-                    extra_headers={"X-PocketClaw-Share-Token": share_token},
+                    extra_headers={"X-ClawDone-Share-Token": share_token},
                 )
                 self.assertEqual(share_forbidden, 403)
             finally:

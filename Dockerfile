@@ -14,23 +14,23 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
-COPY pocketclaw ./pocketclaw
+COPY clawdone ./clawdone
 
 FROM base AS runtime
 
 RUN python -m pip install --upgrade pip \
     && python -m pip install .
 
-ENV POCKETCLAW_HOST=0.0.0.0 \
-    POCKETCLAW_PORT=8787 \
-    POCKETCLAW_STORE=/data/profiles.json
+ENV CLAWDONE_HOST=0.0.0.0 \
+    CLAWDONE_PORT=8787 \
+    CLAWDONE_STORE=/data/profiles.json
 
 VOLUME ["/data"]
 EXPOSE 8787
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD python -c "import os, urllib.request; port=os.getenv('POCKETCLAW_PORT','8787'); token=os.getenv('POCKETCLAW_TOKEN',''); req=urllib.request.Request(f'http://127.0.0.1:{port}/api/health' + (f'?token={token}' if token else '')); urllib.request.urlopen(req, timeout=3)" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD python -c "import os, urllib.request; port=os.getenv('CLAWDONE_PORT','8787'); token=os.getenv('CLAWDONE_TOKEN',''); req=urllib.request.Request(f'http://127.0.0.1:{port}/api/health' + (f'?token={token}' if token else '')); urllib.request.urlopen(req, timeout=3)" || exit 1
 
-CMD ["python", "-m", "pocketclaw", "serve"]
+CMD ["python", "-m", "clawdone", "serve"]
 
 FROM base AS devcontainer
 

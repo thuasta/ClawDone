@@ -11,41 +11,41 @@ from .web import create_server
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="PocketClaw: control tmux-hosted coding agents from your phone")
-    parser.add_argument("--tmux-bin", default=os.getenv("POCKETCLAW_TMUX_BIN", "tmux"), help="local tmux binary path")
+    parser = argparse.ArgumentParser(description="ClawDone: control tmux-hosted coding agents from your phone")
+    parser.add_argument("--tmux-bin", default=os.getenv("CLAWDONE_TMUX_BIN", "tmux"), help="local tmux binary path")
 
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
-    serve_parser = subparsers.add_parser("serve", help="start the PocketClaw mobile web UI")
-    serve_parser.add_argument("--host", default=os.getenv("POCKETCLAW_HOST", "127.0.0.1"))
-    serve_parser.add_argument("--port", type=int, default=int(os.getenv("POCKETCLAW_PORT", "8787")))
-    serve_parser.add_argument("--token", default=os.getenv("POCKETCLAW_TOKEN"), help="optional bearer token")
-    serve_parser.add_argument("--store-path", default=os.getenv("POCKETCLAW_STORE", os.path.expanduser("~/.pocketclaw/profiles.json")), help="path to persisted SSH profiles")
-    serve_parser.add_argument("--ssh-timeout", type=int, default=int(os.getenv("POCKETCLAW_SSH_TIMEOUT", "10")), help="default SSH connect timeout in seconds")
-    serve_parser.add_argument("--ssh-command-timeout", type=int, default=int(os.getenv("POCKETCLAW_SSH_COMMAND_TIMEOUT", "15")), help="default SSH remote command timeout in seconds")
-    serve_parser.add_argument("--ssh-retries", type=int, default=int(os.getenv("POCKETCLAW_SSH_RETRIES", "0")), help="default SSH retry count for failed connections")
-    serve_parser.add_argument("--ssh-retry-backoff-ms", type=int, default=int(os.getenv("POCKETCLAW_SSH_RETRY_BACKOFF_MS", "250")), help="backoff delay between SSH retries in milliseconds")
-    serve_parser.add_argument("--dashboard-workers", type=int, default=int(os.getenv("POCKETCLAW_DASHBOARD_WORKERS", "6")), help="parallel workers used for dashboard target inspection")
+    serve_parser = subparsers.add_parser("serve", help="start the ClawDone mobile web UI")
+    serve_parser.add_argument("--host", default=os.getenv("CLAWDONE_HOST", "127.0.0.1"))
+    serve_parser.add_argument("--port", type=int, default=int(os.getenv("CLAWDONE_PORT", "8787")))
+    serve_parser.add_argument("--token", default=os.getenv("CLAWDONE_TOKEN"), help="optional bearer token")
+    serve_parser.add_argument("--store-path", default=os.getenv("CLAWDONE_STORE", os.path.expanduser("~/.clawdone/profiles.json")), help="path to persisted SSH profiles")
+    serve_parser.add_argument("--ssh-timeout", type=int, default=int(os.getenv("CLAWDONE_SSH_TIMEOUT", "10")), help="default SSH connect timeout in seconds")
+    serve_parser.add_argument("--ssh-command-timeout", type=int, default=int(os.getenv("CLAWDONE_SSH_COMMAND_TIMEOUT", "15")), help="default SSH remote command timeout in seconds")
+    serve_parser.add_argument("--ssh-retries", type=int, default=int(os.getenv("CLAWDONE_SSH_RETRIES", "0")), help="default SSH retry count for failed connections")
+    serve_parser.add_argument("--ssh-retry-backoff-ms", type=int, default=int(os.getenv("CLAWDONE_SSH_RETRY_BACKOFF_MS", "250")), help="backoff delay between SSH retries in milliseconds")
+    serve_parser.add_argument("--dashboard-workers", type=int, default=int(os.getenv("CLAWDONE_DASHBOARD_WORKERS", "6")), help="parallel workers used for dashboard target inspection")
     serve_parser.add_argument(
         "--risk-policy",
-        default=os.getenv("POCKETCLAW_RISK_POLICY", "confirm"),
+        default=os.getenv("CLAWDONE_RISK_POLICY", "confirm"),
         choices=["allow", "confirm", "deny"],
         help="dangerous command policy",
     )
     serve_parser.add_argument(
         "--rbac-tokens-json",
-        default=os.getenv("POCKETCLAW_RBAC_TOKENS", ""),
+        default=os.getenv("CLAWDONE_RBAC_TOKENS", ""),
         help='optional JSON object mapping token to role, e.g. {"admin-token":"admin","viewer-token":"viewer"}',
     )
     serve_parser.add_argument(
         "--host-key-policy",
-        default=os.getenv("POCKETCLAW_HOST_KEY_POLICY", "strict"),
+        default=os.getenv("CLAWDONE_HOST_KEY_POLICY", "strict"),
         choices=["strict", "accept-new", "insecure"],
         help="default SSH host key policy",
     )
     serve_parser.add_argument(
         "--known-hosts-file",
-        default=os.getenv("POCKETCLAW_KNOWN_HOSTS_FILE", "~/.ssh/known_hosts"),
+        default=os.getenv("CLAWDONE_KNOWN_HOSTS_FILE", "~/.ssh/known_hosts"),
         help="known_hosts file used by strict/accept-new policies",
     )
 
@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> int:
             }
             server = create_server(config=config, tmux_client=tmux)
             token_hint = "enabled" if config["token"] else "disabled"
-            print(f"PocketClaw listening on http://{config['host']}:{config['port']} (token {token_hint})")
+            print(f"ClawDone listening on http://{config['host']}:{config['port']} (token {token_hint})")
             print(f"SSH profiles store: {config['store_path']}")
             server.serve_forever()
             return 0

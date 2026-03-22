@@ -1,0 +1,2 @@
+[console_scripts]
+clawdone = clawdone.__main__:main

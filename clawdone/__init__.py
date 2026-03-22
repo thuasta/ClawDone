@@ -1,4 +1,4 @@
-"""PocketClaw package."""
+"""ClawDone package."""
 
 from .app import create_server, main
 

@@ -1,4 +1,4 @@
-# PocketClaw TODO
+# ClawDone TODO
 
 更新完成时间：`2026-03-19`。本次将未完成项全部转为可运行实现（其中“WebSocket 双向终端通道”采用 `ws 入口声明 + SSE 流式 fallback` 方案）。
 

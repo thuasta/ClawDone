@@ -3,7 +3,7 @@
 数据快照时间：`2026-03-19`（GitHub REST API）。
 
 筛选口径：
-- 与 PocketClaw 相关：`coding-agent`、`terminal/CLI`、`SSH/tmux`、`远程控制`、`Web Terminal`。
+- 与 ClawDone 相关：`coding-agent`、`terminal/CLI`、`SSH/tmux`、`远程控制`、`Web Terminal`。
 - 高星优先：主要选择 `5k+ stars`。
 - 近期活跃：优先 `2025-2026` 仍有代码更新的仓库（按 `pushed_at`）。
 
@@ -11,11 +11,11 @@
 
 | Repo | Stars | 最近 Push (UTC) | 相似点 |
 |---|---:|---|---|
-| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 324,404 | 2026-03-19 | 多平台代理/助手系统，和 PocketClaw 同属“远程 AI 助手控制”场景 |
+| [openclaw/openclaw](https://github.com/openclaw/openclaw) | 324,404 | 2026-03-19 | 多平台代理/助手系统，和 ClawDone 同属“远程 AI 助手控制”场景 |
 | [OpenHands/OpenHands](https://github.com/OpenHands/OpenHands) | 69,398 | 2026-03-19 | AI 驱动开发代理，任务执行与状态反馈链路完整 |
 | [openinterpreter/open-interpreter](https://github.com/openinterpreter/open-interpreter) | 62,787 | 2026-02-09 | 用自然语言驱动终端/系统操作，和“手机发命令给 agent”思路接近 |
 | [microsoft/autogen](https://github.com/microsoft/autogen) | 55,877 | 2026-03-18 | 多 agent 编排框架，适合作为任务状态流转/协作模型参考 |
-| [Aider-AI/aider](https://github.com/Aider-AI/aider) | 42,134 | 2026-03-17 | 终端内 AI pair programming，和 PocketClaw 的 tmux-agent 控制链路高度相关 |
+| [Aider-AI/aider](https://github.com/Aider-AI/aider) | 42,134 | 2026-03-17 | 终端内 AI pair programming，和 ClawDone 的 tmux-agent 控制链路高度相关 |
 | [continuedev/continue](https://github.com/continuedev/continue) | 31,943 | 2026-03-18 | 面向代码工作流的 AI 自动化与检查，可参考任务模板/流程管理 |
 | [SWE-agent/SWE-agent](https://github.com/SWE-agent/SWE-agent) | 18,780 | 2026-03-16 | “Issue -> 修复”代理，适合参考 TODO 状态机与结果证据设计 |
 

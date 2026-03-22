@@ -1,3 +1,12 @@
+Metadata-Version: 2.4
+Name: clawdone
+Version: 0.2.0
+Summary: Mobile-friendly voice control for SSH/tmux-hosted coding agents
+Author: ClawDone Contributors
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: paramiko<4,>=3.4
+
 # ClawDone
 
 ClawDone 是一个面向手机端的多目标 SSH 控制台：

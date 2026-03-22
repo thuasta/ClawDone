@@ -1,27 +1,27 @@
 services:
-  pocketclaw:
+  clawdone:
     build:
       context: .
       target: runtime
       args:
         PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.13-slim}
-    image: pocketclaw:latest
+    image: clawdone:latest
     ports:
-      - "${POCKETCLAW_PORT:-8787}:8787"
+      - "${CLAWDONE_PORT:-8787}:8787"
     environment:
-      POCKETCLAW_HOST: 0.0.0.0
-      POCKETCLAW_PORT: 8787
-      POCKETCLAW_STORE: /data/profiles.json
-      POCKETCLAW_TOKEN: ${POCKETCLAW_TOKEN:-}
-      POCKETCLAW_HOST_KEY_POLICY: ${POCKETCLAW_HOST_KEY_POLICY:-strict}
-      POCKETCLAW_SSH_TIMEOUT: ${POCKETCLAW_SSH_TIMEOUT:-10}
-      POCKETCLAW_SSH_COMMAND_TIMEOUT: ${POCKETCLAW_SSH_COMMAND_TIMEOUT:-15}
-      POCKETCLAW_SSH_RETRIES: ${POCKETCLAW_SSH_RETRIES:-0}
-      POCKETCLAW_SSH_RETRY_BACKOFF_MS: ${POCKETCLAW_SSH_RETRY_BACKOFF_MS:-250}
-      POCKETCLAW_DASHBOARD_WORKERS: ${POCKETCLAW_DASHBOARD_WORKERS:-6}
+      CLAWDONE_HOST: 0.0.0.0
+      CLAWDONE_PORT: 8787
+      CLAWDONE_STORE: /data/profiles.json
+      CLAWDONE_TOKEN: ${CLAWDONE_TOKEN:-}
+      CLAWDONE_HOST_KEY_POLICY: ${CLAWDONE_HOST_KEY_POLICY:-strict}
+      CLAWDONE_SSH_TIMEOUT: ${CLAWDONE_SSH_TIMEOUT:-10}
+      CLAWDONE_SSH_COMMAND_TIMEOUT: ${CLAWDONE_SSH_COMMAND_TIMEOUT:-15}
+      CLAWDONE_SSH_RETRIES: ${CLAWDONE_SSH_RETRIES:-0}
+      CLAWDONE_SSH_RETRY_BACKOFF_MS: ${CLAWDONE_SSH_RETRY_BACKOFF_MS:-250}
+      CLAWDONE_DASHBOARD_WORKERS: ${CLAWDONE_DASHBOARD_WORKERS:-6}
     volumes:
-      - pocketclaw-data:/data
+      - clawdone-data:/data
     restart: unless-stopped
 
 volumes:
-  pocketclaw-data:
+  clawdone-data:

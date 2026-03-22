@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -17,6 +18,7 @@ from .store import ProfileStore, mask_profile, normalize_profile
 
 ROLE_LEVELS = {"viewer": 1, "operator": 2, "admin": 3}
 RISK_POLICIES = {"allow", "confirm", "deny"}
+INDEX_VIEWS = ("dashboard", "auth", "chat", "todo", "delivery")
 RISK_HIGH_PATTERNS = [
     re.compile(r"\brm\s+-rf\b", flags=re.IGNORECASE),
     re.compile(r"\bmkfs(\.\w+)?\b", flags=re.IGNORECASE),
@@ -80,7 +82,7 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
         "default_role": str(config.get("default_role", "admin") or "admin").strip().lower(),
         "risk_policy": risk_policy,
         "tmux_bin": str(config.get("tmux_bin", "tmux")),
-        "store_path": str(config.get("store_path", "~/.pocketclaw/profiles.json")),
+        "store_path": str(config.get("store_path", "~/.clawdone/profiles.json")),
         "ssh_timeout": _positive_int(config, "ssh_timeout", 10),
         "ssh_command_timeout": _positive_int(config, "ssh_command_timeout", 15),
         "ssh_retries": _non_negative_int(config, "ssh_retries", 0),
@@ -91,6 +93,33 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def render_index_html(active_view: str = "dashboard") -> str:
+    view = str(active_view or "dashboard").strip().lower()
+    if view not in INDEX_VIEWS:
+        view = "dashboard"
+
+    html = INDEX_HTML
+    for item in INDEX_VIEWS:
+        active = " active" if item == view else ""
+        html = html.replace(
+            f'<div class="page-view" id="view-{item}">',
+            f'<div class="page-view{active}" id="view-{item}">',
+        )
+        html = html.replace(
+            f'<div class="page-view active" id="view-{item}">',
+            f'<div class="page-view{active}" id="view-{item}">',
+        )
+        html = html.replace(
+            f'<button class="tab-button" type="button" data-view-button="{item}">',
+            f'<button class="tab-button{active}" type="button" data-view-button="{item}">',
+        )
+        html = html.replace(
+            f'<button class="tab-button active" type="button" data-view-button="{item}">',
+            f'<button class="tab-button{active}" type="button" data-view-button="{item}">',
+        )
+    return html
+
+
 def extract_token(handler: BaseHTTPRequestHandler) -> str | None:
     auth = handler.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
@@ -99,7 +128,7 @@ def extract_token(handler: BaseHTTPRequestHandler) -> str | None:
     query_token = query.get("token", [None])[0]
     if query_token:
         return query_token
-    header_token = handler.headers.get("X-PocketClaw-Token")
+    header_token = handler.headers.get("X-ClawDone-Token")
     if header_token:
         return header_token.strip()
     return None
@@ -110,7 +139,7 @@ def extract_share_token(handler: BaseHTTPRequestHandler) -> str | None:
     query_token = query.get("share_token", [None])[0]
     if query_token:
         return str(query_token).strip()
-    header_token = handler.headers.get("X-PocketClaw-Share-Token")
+    header_token = handler.headers.get("X-ClawDone-Share-Token")
     if header_token:
         return header_token.strip()
     return None
@@ -127,7 +156,7 @@ def is_authorized(handler: BaseHTTPRequestHandler, config: dict[str, Any]) -> bo
     return token == configured
 
 
-class PocketClawApp:
+class ClawDoneApp:
     def __init__(
         self,
         config: dict[str, Any],
@@ -157,6 +186,9 @@ class PocketClawApp:
         handler.send_response(status)
         handler.send_header("Content-Type", "application/json; charset=utf-8")
         handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        handler.send_header("Pragma", "no-cache")
+        handler.send_header("Expires", "0")
         handler.end_headers()
         handler.wfile.write(data)
 
@@ -165,8 +197,19 @@ class PocketClawApp:
         handler.send_response(HTTPStatus.OK)
         handler.send_header("Content-Type", "text/html; charset=utf-8")
         handler.send_header("Content-Length", str(len(data)))
+        handler.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        handler.send_header("Pragma", "no-cache")
+        handler.send_header("Expires", "0")
         handler.end_headers()
         handler.wfile.write(data)
+
+    def binary_response(self, handler: BaseHTTPRequestHandler, status: int, payload: bytes, content_type: str) -> None:
+        handler.send_response(status)
+        handler.send_header("Content-Type", content_type)
+        handler.send_header("Content-Length", str(len(payload)))
+        handler.send_header("Cache-Control", "public, max-age=3600")
+        handler.end_headers()
+        handler.wfile.write(payload)
 
     def read_json(self, handler: BaseHTTPRequestHandler) -> dict[str, Any]:
         length = int(handler.headers.get("Content-Length", "0"))
@@ -210,15 +253,15 @@ class PocketClawApp:
         if identity is None:
             self.json_response(handler, HTTPStatus.UNAUTHORIZED, {"error": "invalid or missing token"})
             return False
-        setattr(handler, "_pocketclaw_identity", identity)
+        setattr(handler, "_clawdone_identity", identity)
         return True
 
     def identity(self, handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-        identity = getattr(handler, "_pocketclaw_identity", None)
+        identity = getattr(handler, "_clawdone_identity", None)
         if isinstance(identity, dict):
             return identity
         fallback = {"auth": "token", "role": "admin", "share": None}
-        setattr(handler, "_pocketclaw_identity", fallback)
+        setattr(handler, "_clawdone_identity", fallback)
         return fallback
 
     def require_role(self, handler: BaseHTTPRequestHandler, role: str) -> bool:
@@ -245,7 +288,7 @@ class PocketClawApp:
         return True
 
     def request_actor(self, handler: BaseHTTPRequestHandler) -> str:
-        actor = str(handler.headers.get("X-PocketClaw-Actor", "")).strip()
+        actor = str(handler.headers.get("X-ClawDone-Actor", "")).strip()
         if actor:
             return actor
         identity = self.identity(handler)
@@ -393,7 +436,15 @@ class PocketClawApp:
     def handle_get(self, handler: BaseHTTPRequestHandler) -> None:
         parsed = urlparse(handler.path)
         if parsed.path == "/":
-            self.html_response(handler, INDEX_HTML)
+            requested_view = str(parse_qs(parsed.query).get("view", ["dashboard"])[0]).strip().lower()
+            self.html_response(handler, render_index_html(requested_view))
+            return
+        if parsed.path == "/assets/logo.png":
+            logo_path = Path(__file__).resolve().parent.parent / "assets" / "logo.png"
+            if not logo_path.exists():
+                self.json_response(handler, HTTPStatus.NOT_FOUND, {"error": "logo not found"})
+                return
+            self.binary_response(handler, HTTPStatus.OK, logo_path.read_bytes(), "image/png")
             return
         if not self.require_auth(handler):
             return
@@ -1188,7 +1239,7 @@ class PocketClawApp:
         self.json_response(handler, HTTPStatus.NOT_FOUND, {"error": "not found"})
 
 
-def build_handler(app: PocketClawApp) -> type[BaseHTTPRequestHandler]:
+def build_handler(app: ClawDoneApp) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             try:
@@ -1218,5 +1269,5 @@ def create_server(
     store: ProfileStore | None = None,
     remote_tmux: RemoteTmuxClient | None = None,
 ) -> ThreadingHTTPServer:
-    app = PocketClawApp(config=config, tmux_client=tmux_client, store=store, remote_tmux=remote_tmux)
+    app = ClawDoneApp(config=config, tmux_client=tmux_client, store=store, remote_tmux=remote_tmux)
     return ThreadingHTTPServer((app.config["host"], app.config["port"]), build_handler(app))

@@ -1,17 +1,17 @@
-# PocketClaw Quick Start
+# ClawDone Quick Start
 
 ## 1. 主机端（服务端）
 
 ```bash
-cd /Users/zhangboshi/Downloads/py7cpp/PocketClaw
+cd /Users/zhangboshi/Downloads/py7cpp/ClawDone
 
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
 
-python -m pocketclaw serve \
+python -m clawdone serve \
   --host 0.0.0.0 \
-  --port 8787 \
+  --port 8000 \
   --token your-secret
 ```
 

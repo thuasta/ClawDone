@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Minimal quality gates for PocketClaw workflow safety checks."""
+"""Minimal quality gates for ClawDone workflow safety checks."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-WEB = ROOT / "pocketclaw" / "web.py"
-STORE = ROOT / "pocketclaw" / "store.py"
+WEB = ROOT / "clawdone" / "web.py"
+STORE = ROOT / "clawdone" / "store.py"
 
 
 def require_contains(path: Path, needle: str) -> None:

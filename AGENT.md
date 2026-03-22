@@ -1,9 +1,9 @@
 本项目希望通过手机端连接服务器然后可以通过语音的方式向tmux中的codex等vibecoding-agent发送命令，实现下面的功能：
 
 
-Pocket-Claw is a lightweight tool that allows you to control coding agents running on a remote server directly from your mobile device.
+ClawDone is a lightweight tool that allows you to control coding agents running on a remote server directly from your mobile device.
 
-By connecting to a server via SSH, Pocket-Claw enables you to send commands to long-running coding agents (such as Codex or other vibe-coding agents) running inside tmux sessions. This allows developers to start tasks, trigger workflows, and interact with autonomous coding systems from anywhere using only a phone.
+By connecting to a server via SSH, ClawDone enables you to send commands to long-running coding agents (such as Codex or other vibe-coding agents) running inside tmux sessions. This allows developers to start tasks, trigger workflows, and interact with autonomous coding systems from anywhere using only a phone.
 
 The project is designed for developers who frequently run AI coding agents on remote machines and want a simple, mobile-friendly way to control them without opening a full laptop environment.
 
@@ -70,7 +70,7 @@ Why This Project
 
 Running coding agents on remote servers is increasingly common, but interacting with them from mobile devices is inconvenient.
 
-Pocket-Claw provides a minimal and powerful interface to:
+ClawDone provides a minimal and powerful interface to:
 
 control remote coding agents
 
