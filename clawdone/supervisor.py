@@ -10,6 +10,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+from .utils import extract_json_object
+
 SUPERVISOR_PROVIDERS = {"openai_compatible"}
 SUPERVISOR_PERMISSIONS = {"dispatch", "review", "accept"}
 DEFAULT_SUPERVISOR_BASE_URL = "https://api.openai.com/v1"
@@ -187,35 +189,12 @@ class SupervisorClient:
                 return decoded
         except json.JSONDecodeError:
             pass
-        start = text.find("{")
-        if start < 0:
-            raise RuntimeError("supervisor output did not contain a JSON object")
-        depth = 0
-        in_string = False
-        escaped = False
-        for index in range(start, len(text)):
-            char = text[index]
-            if in_string:
-                if escaped:
-                    escaped = False
-                elif char == "\\":
-                    escaped = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-                continue
-            if char == '{':
-                depth += 1
-            elif char == '}':
-                depth -= 1
-                if depth == 0:
-                    snippet = text[start : index + 1]
-                    decoded = json.loads(snippet)
-                    if isinstance(decoded, dict):
-                        return decoded
-                    break
+        result = extract_json_object(text)
+        if result is not None:
+            snippet, _ = result
+            decoded = json.loads(snippet)
+            if isinstance(decoded, dict):
+                return decoded
         raise RuntimeError("supervisor output did not contain valid JSON object")
 
     def dispatch(self, config: dict[str, Any], todo: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:

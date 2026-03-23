@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import re
@@ -19,6 +20,7 @@ from .local_tmux import TmuxClient
 from .remote import HOST_KEY_POLICIES, PARAMIKO_AVAILABLE, RemoteTmuxClient, SSHExecutor
 from .store import ProfileStore, mask_profile, mask_supervisor_config, normalize_profile
 from .supervisor import SupervisorClient
+from .utils import extract_json_object
 
 logger = logging.getLogger("clawdone")
 
@@ -157,17 +159,6 @@ def extract_share_token(handler: BaseHTTPRequestHandler) -> str | None:
     return None
 
 
-def is_authorized(handler: BaseHTTPRequestHandler, config: dict[str, Any]) -> bool:
-    token = extract_token(handler)
-    rbac_tokens = config.get("rbac_tokens", {}) or {}
-    if isinstance(rbac_tokens, dict) and rbac_tokens:
-        return bool(token and token in rbac_tokens)
-    configured = config.get("token")
-    if not configured:
-        return True
-    return token == configured
-
-
 class ClawDoneApp:
     def __init__(
         self,
@@ -200,23 +191,45 @@ class ClawDoneApp:
         self._todo_dispatch_lock = threading.Lock()
         if self.config["default_role"] not in ROLE_LEVELS:
             self.config["default_role"] = "admin"
+        # Pre-compute HTML view variants and their gzipped forms at startup.
+        self._html_cache: dict[str, str] = {}
+        self._html_cache_gzipped: dict[str, bytes] = {}
+        for view in INDEX_VIEWS:
+            html = render_index_html(view)
+            self._html_cache[view] = html
+            self._html_cache_gzipped[view] = gzip.compress(html.encode("utf-8"))
+
+    def _accepts_gzip(self, handler: BaseHTTPRequestHandler) -> bool:
+        return "gzip" in handler.headers.get("Accept-Encoding", "")
 
     def json_response(self, handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload).encode("utf-8")
+        use_gzip = len(data) > 1024 and self._accepts_gzip(handler)
+        if use_gzip:
+            data = gzip.compress(data)
         handler.send_response(status)
         handler.send_header("Content-Type", "application/json; charset=utf-8")
         handler.send_header("Content-Length", str(len(data)))
+        if use_gzip:
+            handler.send_header("Content-Encoding", "gzip")
         handler.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         handler.send_header("Pragma", "no-cache")
         handler.send_header("Expires", "0")
         handler.end_headers()
         handler.wfile.write(data)
 
-    def html_response(self, handler: BaseHTTPRequestHandler, html: str) -> None:
-        data = html.encode("utf-8")
-        handler.send_response(HTTPStatus.OK)
-        handler.send_header("Content-Type", "text/html; charset=utf-8")
-        handler.send_header("Content-Length", str(len(data)))
+    def html_response(self, handler: BaseHTTPRequestHandler, html: str, gzipped: bytes | None = None) -> None:
+        if gzipped is not None and self._accepts_gzip(handler):
+            data = gzipped
+            handler.send_response(HTTPStatus.OK)
+            handler.send_header("Content-Type", "text/html; charset=utf-8")
+            handler.send_header("Content-Length", str(len(data)))
+            handler.send_header("Content-Encoding", "gzip")
+        else:
+            data = html.encode("utf-8")
+            handler.send_response(HTTPStatus.OK)
+            handler.send_header("Content-Type", "text/html; charset=utf-8")
+            handler.send_header("Content-Length", str(len(data)))
         handler.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
         handler.send_header("Pragma", "no-cache")
         handler.send_header("Expires", "0")
@@ -351,12 +364,15 @@ class ClawDoneApp:
 
     def dashboard_payload(self) -> dict[str, Any]:
         profiles = self.store.list_profiles()
-        aliases = {profile["name"]: self.store.aliases_for(profile["name"]) for profile in profiles}
+        aliases = self.store.all_aliases()
         dashboard = self.remote_tmux.dashboard(profiles, aliases_by_profile=aliases)
         todo_summaries = self.store.todo_summary()
         summary_by_profile: dict[str, list[dict[str, Any]]] = {}
         for summary in todo_summaries:
             summary_by_profile.setdefault(str(summary.get("profile", "")), []).append(summary)
+
+        profile_names = [profile["name"] for profile in profiles]
+        bulk_metrics = self.store.bulk_workflow_metrics(profile_names, window_days=30)
 
         for target in dashboard.get("targets", []):
             profile_summaries = summary_by_profile.get(str(target.get("name", "")), [])
@@ -371,12 +387,12 @@ class ClawDoneApp:
                 "last_title": latest.get("last_title", "") if latest else "",
                 "last_target": latest.get("target", "") if latest else "",
             }
-            target["workflow_metrics"] = self.store.workflow_metrics(profile_name=str(target.get("name", "")), window_days=30)
+            target["workflow_metrics"] = bulk_metrics.get(str(target.get("name", "")), {})
         return {
             **dashboard,
             "profile_count": len(profiles),
             "online_count": sum(1 for target in dashboard["targets"] if target.get("online")),
-            "workflow_metrics": self.store.workflow_metrics(window_days=30),
+            "workflow_metrics": bulk_metrics.get("", {}),
         }
 
     def record_audit_safe(self, payload: dict[str, Any]) -> None:
@@ -741,32 +757,7 @@ class ClawDoneApp:
         return dispatched
 
     def _extract_balanced_report_json(self, text: str, start_index: int) -> tuple[str, int] | None:
-        start = text.find("{", start_index)
-        if start < 0:
-            return None
-        depth = 0
-        in_string = False
-        escape = False
-        for index in range(start, len(text)):
-            char = text[index]
-            if in_string:
-                if escape:
-                    escape = False
-                elif char == "\\":
-                    escape = True
-                elif char == '"':
-                    in_string = False
-                continue
-            if char == '"':
-                in_string = True
-                continue
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start:index + 1], index + 1
-        return None
+        return extract_json_object(text, start_index)
 
     def extract_todo_reports(self, output: str) -> list[dict[str, Any]]:
         text = str(output or "")
@@ -1002,7 +993,13 @@ class ClawDoneApp:
         parsed = urlparse(handler.path)
         if parsed.path == "/":
             requested_view = str(parse_qs(parsed.query).get("view", ["dashboard"])[0]).strip().lower()
-            self.html_response(handler, render_index_html(requested_view))
+            if requested_view not in self._html_cache:
+                requested_view = "dashboard"
+            self.html_response(
+                handler,
+                self._html_cache[requested_view],
+                gzipped=self._html_cache_gzipped[requested_view],
+            )
             return
         if parsed.path == "/assets/logo.png":
             logo_path = Path(__file__).resolve().parent.parent / "assets" / "logo.png"
