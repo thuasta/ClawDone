@@ -252,12 +252,79 @@ class RemoteTmuxClient:
             )
         return panes
 
+    def _snapshot_raw(self, profile: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        """Run a single SSH command to collect sessions, windows, and panes."""
+        tmux_bin = shlex.quote(str(profile.get("tmux_bin") or "tmux"))
+        session_fmt = "#{session_name}\t#{session_windows}\t#{session_attached}"
+        window_fmt = "#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}"
+        pane_fmt = "#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_active}"
+        combined_cmd = (
+            f"{tmux_bin} list-sessions -F {shlex.quote(session_fmt)} 2>/dev/null; "
+            f"echo '---DELIM---'; "
+            f"{tmux_bin} list-windows -a -F {shlex.quote(window_fmt)} 2>/dev/null; "
+            f"echo '---DELIM---'; "
+            f"{tmux_bin} list-panes -a -F {shlex.quote(pane_fmt)} 2>/dev/null"
+        )
+        result = self.executor.run(profile, combined_cmd)
+        stdout = str(result.get("stdout", ""))
+
+        parts = stdout.split("---DELIM---")
+        raw_sessions = parts[0].strip() if len(parts) > 0 else ""
+        raw_windows = parts[1].strip() if len(parts) > 1 else ""
+        raw_panes = parts[2].strip() if len(parts) > 2 else ""
+
+        sessions: list[dict[str, Any]] = []
+        for line in raw_sessions.splitlines():
+            if not line.strip():
+                continue
+            cols = line.split("\t")
+            sessions.append({
+                "name": cols[0],
+                "window_count": int(cols[1]) if len(cols) > 1 and cols[1].isdigit() else 0,
+                "attached": bool(int(cols[2])) if len(cols) > 2 and cols[2].isdigit() else False,
+            })
+
+        windows: list[dict[str, Any]] = []
+        for line in raw_windows.splitlines():
+            if not line.strip():
+                continue
+            cols = line.split("\t")
+            windows.append({
+                "session": cols[0],
+                "index": int(cols[1]) if len(cols) > 1 and cols[1].isdigit() else 0,
+                "name": cols[2] if len(cols) > 2 else "",
+                "active": bool(int(cols[3])) if len(cols) > 3 and cols[3].isdigit() else False,
+            })
+
+        panes: list[dict[str, Any]] = []
+        for line in raw_panes.splitlines():
+            if not line.strip():
+                continue
+            cols = line.split("\t")
+            session_name = cols[0]
+            window_index = int(cols[1]) if len(cols) > 1 and cols[1].isdigit() else 0
+            pane_index = int(cols[3]) if len(cols) > 3 and cols[3].isdigit() else 0
+            panes.append({
+                "session": session_name,
+                "window_index": window_index,
+                "window_name": cols[2] if len(cols) > 2 else "",
+                "pane_index": pane_index,
+                "title": cols[4] if len(cols) > 4 else "",
+                "current_command": cols[5] if len(cols) > 5 else "",
+                "active": bool(int(cols[6])) if len(cols) > 6 and cols[6].isdigit() else False,
+                "target": f"{session_name}:{window_index}.{pane_index}",
+            })
+
+        return sessions, windows, panes
+
     def snapshot(self, profile: dict[str, Any], aliases: dict[str, str] | None = None) -> dict[str, Any]:
         alias_map = aliases or {}
-        sessions = {item["name"]: {**item, "windows": []} for item in self.list_sessions(profile)}
+        raw_sessions, raw_windows, raw_panes = self._snapshot_raw(profile)
+
+        sessions = {item["name"]: {**item, "windows": []} for item in raw_sessions}
         windows_by_key: dict[tuple[str, int], dict[str, Any]] = {}
 
-        for window in self.list_windows(profile):
+        for window in raw_windows:
             session = sessions.setdefault(
                 window["session"],
                 {"name": window["session"], "window_count": 0, "attached": False, "windows": []},
@@ -266,7 +333,7 @@ class RemoteTmuxClient:
             session["windows"].append(payload)
             windows_by_key[(window["session"], window["index"])] = payload
 
-        for pane in self.list_panes(profile):
+        for pane in raw_panes:
             session = sessions.setdefault(
                 pane["session"],
                 {"name": pane["session"], "window_count": 0, "attached": False, "windows": []},

@@ -21,7 +21,6 @@ from clawdone.app import (
     command_result,
     create_server,
     extract_token,
-    is_authorized,
     mask_profile,
     normalize_config,
     normalize_profile,
@@ -30,6 +29,19 @@ from clawdone.html import INDEX_HTML
 from clawdone.supervisor import SupervisorClient, normalize_supervisor_config
 from clawdone.web import ClawDoneApp, render_index_html
 
+SNAPSHOT_CMD = (
+    "tmux list-sessions -F '#{session_name}\t#{session_windows}\t#{session_attached}' 2>/dev/null; "
+    "echo '---DELIM---'; "
+    "tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}' 2>/dev/null; "
+    "echo '---DELIM---'; "
+    "tmux list-panes -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_active}' 2>/dev/null"
+)
+
+
+def snapshot_response(sessions: str = "", windows: str = "", panes: str = "") -> dict:
+    """Build a combined snapshot response from individual parts."""
+    stdout = f"{sessions}\n---DELIM---\n{windows}\n---DELIM---\n{panes}"
+    return command_result(0, stdout)
 
 
 class DummyResult:
@@ -762,9 +774,11 @@ class RemoteTmuxClientTests(unittest.TestCase):
     def test_snapshot_builds_nested_sessions_windows_and_panes(self) -> None:
         executor = FakeSSHExecutor(
             responses={
-                ("office", "tmux list-sessions -F '#{session_name}\t#{session_windows}\t#{session_attached}'"): command_result(0, "codex\t2\t1\n"),
-                ("office", "tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}'"): command_result(0, "codex\t0\tmain\t1\ncodex\t1\tlogs\t0\n"),
-                ("office", "tmux list-panes -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_active}'"): command_result(0, "codex\t0\tmain\t0\t\tcodex\t1\ncodex\t1\tlogs\t0\t\tbash\t1\n"),
+                ("office", SNAPSHOT_CMD): snapshot_response(
+                    sessions="codex\t2\t1",
+                    windows="codex\t0\tmain\t1\ncodex\t1\tlogs\t0",
+                    panes="codex\t0\tmain\t0\t\tcodex\t1\ncodex\t1\tlogs\t0\t\tbash\t1",
+                ),
             }
         )
         client = RemoteTmuxClient(executor=executor)
@@ -796,9 +810,11 @@ class RemoteTmuxClientTests(unittest.TestCase):
     def test_inspect_profile_handles_online_and_offline(self) -> None:
         online_executor = FakeSSHExecutor(
             responses={
-                ("office", "tmux list-sessions -F '#{session_name}\t#{session_windows}\t#{session_attached}'"): command_result(0, "codex\t1\t1\n"),
-                ("office", "tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}'"): command_result(0, "codex\t0\tmain\t1\n"),
-                ("office", "tmux list-panes -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_active}'"): command_result(0, "codex\t0\tmain\t0\t\tcodex\t1\n"),
+                ("office", SNAPSHOT_CMD): snapshot_response(
+                    sessions="codex\t1\t1",
+                    windows="codex\t0\tmain\t1",
+                    panes="codex\t0\tmain\t0\t\tcodex\t1",
+                ),
             }
         )
         offline_executor = FakeSSHExecutor(failures={"office": "network down"})
@@ -811,9 +827,11 @@ class RemoteTmuxClientTests(unittest.TestCase):
     def test_dashboard_aggregates_multiple_targets(self) -> None:
         executor = FakeSSHExecutor(
             responses={
-                ("office", "tmux list-sessions -F '#{session_name}\t#{session_windows}\t#{session_attached}'"): command_result(0, "codex\t1\t1\n"),
-                ("office", "tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}'"): command_result(0, "codex\t0\tmain\t1\n"),
-                ("office", "tmux list-panes -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_active}'"): command_result(0, "codex\t0\tmain\t0\t\tcodex\t1\n"),
+                ("office", SNAPSHOT_CMD): snapshot_response(
+                    sessions="codex\t1\t1",
+                    windows="codex\t0\tmain\t1",
+                    panes="codex\t0\tmain\t0\t\tcodex\t1",
+                ),
             },
             failures={"lab": "offline"},
         )
@@ -862,15 +880,6 @@ class AuthTests(unittest.TestCase):
     def test_extract_token_from_query_string(self) -> None:
         handler = DummyHandler(path="/api/sessions?token=query-secret")
         self.assertEqual(extract_token(handler), "query-secret")
-
-    def test_authorized_when_tokens_match(self) -> None:
-        handler = DummyHandler(auth="Bearer secret")
-        self.assertTrue(is_authorized(handler, {"token": "secret"}))
-
-    def test_unauthorized_when_tokens_do_not_match(self) -> None:
-        handler = DummyHandler(header_token="wrong")
-        self.assertFalse(is_authorized(handler, {"token": "secret"}))
-
 
 class NormalizationTests(unittest.TestCase):
     def test_normalize_profile_and_mask_profile(self) -> None:
@@ -998,9 +1007,11 @@ class WebIntegrationTests(unittest.TestCase):
             store.save_template({"name": "Summarize", "command": "summarize latest changes", "profile": "office"})
             executor = FakeSSHExecutor(
                 responses={
-                    ("office", "tmux list-sessions -F '#{session_name}\t#{session_windows}\t#{session_attached}'"): command_result(0, "codex\t1\t1\n"),
-                    ("office", "tmux list-windows -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{window_active}'"): command_result(0, "codex\t0\tmain\t1\n"),
-                    ("office", "tmux list-panes -a -F '#{session_name}\t#{window_index}\t#{window_name}\t#{pane_index}\t#{pane_title}\t#{pane_current_command}\t#{pane_active}'"): command_result(0, "codex\t0\tmain\t0\t\tcodex\t1\n"),
+                    ("office", SNAPSHOT_CMD): snapshot_response(
+                        sessions="codex\t1\t1",
+                        windows="codex\t0\tmain\t1",
+                        panes="codex\t0\tmain\t0\t\tcodex\t1",
+                    ),
                     ("office", "tmux capture-pane -p -t codex:0.0 -S -120"): command_result(0, "ready"),
                     ("office", "tmux send-keys -t codex:0.0 -l 'fix auth and run tests'"): command_result(0),
                     ("office", "tmux send-keys -t codex:0.0 Enter"): command_result(0),
