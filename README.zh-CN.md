@@ -219,6 +219,31 @@ python -m clawdone capture --session codex --lines 120
 python -m unittest tests.test_app
 ```
 
+## GitHub Pages
+
+仓库已经新增 `docs/` 静态站点，以及自动部署工作流 `.github/workflows/deploy-pages.yml`。
+
+这个仓库更推荐直接用 `docs/` 目录发布：
+
+1. 先把 `docs/` 目录提交并推送到 `main` 或 `master`。
+2. 打开 GitHub 仓库的 **Settings → Pages**。
+3. 将 **Source** 设置为 **Deploy from a branch**。
+4. 选择分支 `main`，目录选择 `/docs`。
+5. 保存后等待 GitHub Pages 发布。
+
+也可以使用 GitHub Actions：
+
+- 将 **Source** 设置为 **GitHub Actions**。
+- 然后推送到 `main` 或 `master`，或者手动运行 `deploy-pages` 工作流。
+
+按当前仓库地址，项目页面通常会发布到：
+
+```text
+https://thuasta.github.io/ClawDone/
+```
+
+注意这是 **project site**，不是用户主页。因此直接打开 `https://thuasta.github.io/` 仍然可能是 404，这属于正常现象；应访问带仓库名路径的地址。
+
 ## Roadmap
 
 项目后续方向见 `ROADMAP.md`。

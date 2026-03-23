@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ClawDone · Mobile control surface for remote coding agents</title>
+    <meta
+      name="description"
+      content="ClawDone 是一个面向手机端的远程 coding agent 控制台，可通过 SSH 和 tmux 在移动设备上控制远程 AI coding workflows。"
+    >
+    <meta name="theme-color" content="#0b1020">
+    <link rel="icon" type="image/png" href="assets/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    >
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header">
+        <a class="brand" href="#top" aria-label="ClawDone home">
+          <img src="assets/logo.png" alt="ClawDone logo">
+          <span>ClawDone</span>
+        </a>
+        <nav class="site-nav">
+          <a href="#features" data-i18n="navFeatures">Features</a>
+          <a href="#workflow" data-i18n="navWorkflow">Workflow</a>
+          <a href="#quickstart" data-i18n="navQuickstart">Quick Start</a>
+          <a href="#links" data-i18n="navLinks">Links</a>
+        </nav>
+        <div class="header-actions">
+          <div class="lang-switch" aria-label="Language switch">
+            <button type="button" class="is-active" data-lang="zh-CN">中</button>
+            <button type="button" data-lang="en">EN</button>
+          </div>
+          <a class="button button-ghost" href="https://github.com/thuasta/ClawDone" target="_blank" rel="noreferrer" data-i18n="githubButton">GitHub</a>
+        </div>
+      </header>
+
+      <main id="top">
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="eyebrow" data-i18n="eyebrow">Mobile-first · SSH · tmux · AI Agents</p>
+            <h1 data-i18n="heroTitle">用手机远程控制你的 coding agents</h1>
+            <p class="hero-text" data-i18n="heroText">
+              ClawDone 把手机浏览器、SSH 和远程 tmux pane 连接起来，让你随时查看 agent 状态、发送命令、中断任务、抓取输出，并跟踪轻量任务流。
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="https://github.com/thuasta/ClawDone" target="_blank" rel="noreferrer" data-i18n="primaryCta">查看仓库</a>
+              <a class="button button-secondary" href="#quickstart" data-i18n="secondaryCta">快速开始</a>
+            </div>
+            <ul class="hero-points">
+              <li data-i18n="pointOne">连接远程 Linux 服务器上的 tmux pane</li>
+              <li data-i18n="pointTwo">在手机上调度 Codex 或其他 vibe-coding agents</li>
+              <li data-i18n="pointThree">内置任务、审计和风险策略</li>
+            </ul>
+          </div>
+          <div class="hero-visual">
+            <div class="device-frame">
+              <img src="assets/image.png" alt="ClawDone mobile UI screenshot">
+            </div>
+            <div class="floating-card card-top">
+              <span class="card-label" data-i18n="floatingLabelOne">Agent status</span>
+              <strong data-i18n="floatingValueOne">3 panes online</strong>
+            </div>
+            <div class="floating-card card-bottom">
+              <span class="card-label" data-i18n="floatingLabelTwo">Risk policy</span>
+              <strong data-i18n="floatingValueTwo">confirm before dangerous commands</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="stats-grid">
+          <article class="stat-card">
+            <span class="stat-value">SSH</span>
+            <p data-i18n="statOne">远程连接和目标管理</p>
+          </article>
+          <article class="stat-card">
+            <span class="stat-value">tmux</span>
+            <p data-i18n="statTwo">会话、窗口、pane 级别控制</p>
+          </article>
+          <article class="stat-card">
+            <span class="stat-value">Mobile</span>
+            <p data-i18n="statThree">针对手机浏览器优化的控制界面</p>
+          </article>
+          <article class="stat-card">
+            <span class="stat-value">Audit</span>
+            <p data-i18n="statFour">任务证据、日志和轻量工作流</p>
+          </article>
+        </section>
+
+        <section id="features" class="section">
+          <div class="section-heading">
+            <p class="eyebrow" data-i18n="featuresEyebrow">What it does</p>
+            <h2 data-i18n="featuresTitle">为远程 AI 开发流程准备的控制面板</h2>
+            <p data-i18n="featuresLead">
+              不是完整远程桌面，而是一个更适合手机端的薄控制层：够快、够轻、够清晰。
+            </p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <h3 data-i18n="featureOneTitle">远程目标管理</h3>
+              <p data-i18n="featureOneText">保存多个 SSH target，支持分组、标签、收藏、备注以及 SSH 覆盖参数。</p>
+            </article>
+            <article class="feature-card">
+              <h3 data-i18n="featureTwoTitle">tmux 精准控制</h3>
+              <p data-i18n="featureTwoText">列出 session、window、pane，把 pane 直接视为 agent endpoint 并发送命令或 Ctrl+C。</p>
+            </article>
+            <article class="feature-card">
+              <h3 data-i18n="featureThreeTitle">移动优先交互</h3>
+              <p data-i18n="featureThreeText">支持命令模板、命令历史和浏览器语音转文字，减少手机输入摩擦。</p>
+            </article>
+            <article class="feature-card">
+              <h3 data-i18n="featureFourTitle">任务与审计</h3>
+              <p data-i18n="featureFourText">把输出片段、摘要和状态变更留在任务记录里，方便回看与交付。</p>
+            </article>
+            <article class="feature-card">
+              <h3 data-i18n="featureFiveTitle">角色与风险策略</h3>
+              <p data-i18n="featureFiveText">支持 Bearer Token、RBAC 和危险命令 allow / confirm / deny 策略。</p>
+            </article>
+            <article class="feature-card">
+              <h3 data-i18n="featureSixTitle">开放源码</h3>
+              <p data-i18n="featureSixText">Python 3.11+ 项目，适合作为个人远程 agent 控制台或二次开发基础。</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="workflow" class="section workflow-section">
+          <div class="section-heading">
+            <p class="eyebrow" data-i18n="workflowEyebrow">Workflow</p>
+            <h2 data-i18n="workflowTitle">从手机到 agent 的最短链路</h2>
+          </div>
+          <div class="workflow-line">
+            <div class="workflow-step">
+              <span>1</span>
+              <h3 data-i18n="workflowOneTitle">Mobile Browser</h3>
+              <p data-i18n="workflowOneText">在手机浏览器打开 ClawDone 控制台。</p>
+            </div>
+            <div class="workflow-step">
+              <span>2</span>
+              <h3 data-i18n="workflowTwoTitle">ClawDone Service</h3>
+              <p data-i18n="workflowTwoText">Web 服务负责认证、任务状态和命令下发。</p>
+            </div>
+            <div class="workflow-step">
+              <span>3</span>
+              <h3 data-i18n="workflowThreeTitle">SSH + tmux</h3>
+              <p data-i18n="workflowThreeText">通过 SSH 接管远程 tmux pane，发送命令并抓取输出。</p>
+            </div>
+            <div class="workflow-step">
+              <span>4</span>
+              <h3 data-i18n="workflowFourTitle">Coding Agent</h3>
+              <p data-i18n="workflowFourText">Codex 或其他 coding agents 接收任务并持续执行。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section use-cases">
+          <div class="section-heading">
+            <p class="eyebrow" data-i18n="useCasesEyebrow">Use cases</p>
+            <h2 data-i18n="useCasesTitle">适合这些真实场景</h2>
+          </div>
+          <div class="use-case-grid">
+            <article class="use-case-card">
+              <h3 data-i18n="useCaseOneTitle">路上也能派活</h3>
+              <p data-i18n="useCaseOneText">离开电脑后，仍可以从手机给远程 agent 安排实现任务、跑测试或继续修 bug。</p>
+            </article>
+            <article class="use-case-card">
+              <h3 data-i18n="useCaseTwoTitle">多 agent 并行调度</h3>
+              <p data-i18n="useCaseTwoText">为不同 pane 绑定别名，例如 backend-agent、research-agent、release-bot。</p>
+            </article>
+            <article class="use-case-card">
+              <h3 data-i18n="useCaseThreeTitle">轻量任务交付</h3>
+              <p data-i18n="useCaseThreeText">把 todo、证据和输出摘要保存在同一界面，方便回溯和状态同步。</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="quickstart" class="section quickstart">
+          <div class="section-heading">
+            <p class="eyebrow" data-i18n="quickstartEyebrow">Quick start</p>
+            <h2 data-i18n="quickstartTitle">三步跑起来</h2>
+          </div>
+          <div class="quickstart-grid">
+            <article class="code-card">
+              <h3 data-i18n="installTitle">1. 安装</h3>
+              <pre><code>python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .</code></pre>
+            </article>
+            <article class="code-card">
+              <h3 data-i18n="serveTitle">2. 启动服务</h3>
+              <pre><code>python -m clawdone serve \
+  --host 0.0.0.0 \
+  --port 8787 \
+  --token your-secret</code></pre>
+            </article>
+            <article class="code-card">
+              <h3 data-i18n="openTitle">3. 打开手机浏览器</h3>
+              <pre><code>http://&lt;server-ip&gt;:8787</code></pre>
+            </article>
+          </div>
+        </section>
+
+        <section id="links" class="section links-section">
+          <div class="section-heading">
+            <p class="eyebrow" data-i18n="linksEyebrow">Project links</p>
+            <h2 data-i18n="linksTitle">继续了解项目</h2>
+          </div>
+          <div class="link-grid">
+            <a class="link-card" href="https://github.com/thuasta/ClawDone" target="_blank" rel="noreferrer">
+              <strong data-i18n="repoLinkTitle">GitHub Repository</strong>
+              <span data-i18n="repoLinkText">查看源码、Issue 与发布记录</span>
+            </a>
+            <a class="link-card" href="https://github.com/thuasta/ClawDone/blob/main/README.md" target="_blank" rel="noreferrer">
+              <strong data-i18n="readmeLinkTitle">README</strong>
+              <span data-i18n="readmeLinkText">阅读英文项目介绍和使用说明</span>
+            </a>
+            <a class="link-card" href="https://github.com/thuasta/ClawDone/blob/main/README.zh-CN.md" target="_blank" rel="noreferrer">
+              <strong data-i18n="zhReadmeLinkTitle">中文文档</strong>
+              <span data-i18n="zhReadmeLinkText">查看简体中文项目说明</span>
+            </a>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <p data-i18n="footerText">ClawDone · Mobile-friendly control surface for SSH/tmux-hosted coding agents.</p>
+      </footer>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

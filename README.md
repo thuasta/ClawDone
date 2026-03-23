@@ -219,6 +219,31 @@ Run tests:
 python -m unittest tests.test_app
 ```
 
+## GitHub Pages
+
+This repository now includes a static landing page under `docs/` and an automated deployment workflow at `.github/workflows/deploy-pages.yml`.
+
+Recommended setup for this repo:
+
+1. Commit and push the `docs/` directory to `main` or `master`.
+2. Open **Settings → Pages** in the GitHub repository.
+3. Set **Source** to **Deploy from a branch**.
+4. Select branch `main` and folder `/docs`.
+5. Save and wait for GitHub Pages to publish.
+
+Alternative setup:
+
+- Set **Source** to **GitHub Actions** and use `.github/workflows/deploy-pages.yml`.
+- Then push to `main` or `master`, or manually run the `deploy-pages` workflow.
+
+For the current repository, the project page is expected at:
+
+```text
+https://thuasta.github.io/ClawDone/
+```
+
+Note that this is a **project site**, not a user site. Opening `https://thuasta.github.io/` may still show a 404 page, which is expected unless a separate user site exists there.
+
 ## Roadmap
 
 See `ROADMAP.md` for the current project direction.
