@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 from uuid import uuid4
+
+from .supervisor import mask_supervisor_config, normalize_supervisor_config
 
 PROFILE_HOST_KEY_POLICIES = {"", "strict", "accept-new", "insecure"}
 TODO_STATUSES = {"todo", "in_progress", "done", "verified", "blocked"}
@@ -280,57 +284,6 @@ def normalize_workspace_template(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def normalize_supervisor_permissions(value: Any) -> list[str]:
-    if isinstance(value, str):
-        items = value.split(",")
-    elif isinstance(value, list):
-        items = value
-    else:
-        items = []
-    allowed = {"dispatch", "review", "accept"}
-    permissions: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        permission = str(item).strip().lower()
-        if not permission or permission in seen:
-            continue
-        if permission not in allowed:
-            raise ValueError(f"supervisor permission must be one of: {', '.join(sorted(allowed))}")
-        permissions.append(permission)
-        seen.add(permission)
-    return permissions or ["dispatch", "review", "accept"]
-
-
-def normalize_supervisor_config(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": str(payload.get("id", "")).strip() or uuid4().hex,
-        "name": str(payload.get("name", "Supervisor")).strip() or "Supervisor",
-        "profile": str(payload.get("profile", "")).strip(),
-        "provider": str(payload.get("provider", "openai_compatible")).strip().lower() or "openai_compatible",
-        "base_url": str(payload.get("base_url", "https://api.openai.com/v1")).strip() or "https://api.openai.com/v1",
-        "model": str(payload.get("model", "gpt-4.1-mini")).strip() or "gpt-4.1-mini",
-        "api_key": str(payload.get("api_key", "")),
-        "api_key_ref": str(payload.get("api_key_ref", "")).strip(),
-        "enabled": bool(payload.get("enabled", True)),
-        "permissions": normalize_supervisor_permissions(payload.get("permissions", ["dispatch", "review", "accept"])),
-        "auto_dispatch": bool(payload.get("auto_dispatch", True)),
-        "auto_review": bool(payload.get("auto_review", True)),
-        "auto_accept": bool(payload.get("auto_accept", True)),
-        "system_prompt": str(payload.get("system_prompt", "")).strip(),
-        "created_at": str(payload.get("created_at", "")).strip(),
-        "updated_at": str(payload.get("updated_at", "")).strip(),
-    }
-
-
-def mask_supervisor_config(config: dict[str, Any]) -> dict[str, Any]:
-    normalized = normalize_supervisor_config(config)
-    return {
-        **normalized,
-        "api_key": "",
-        "has_api_key": bool(normalized.get("api_key")) or bool(normalized.get("api_key_ref")),
-    }
-
-
 def normalize_audit_entry(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(payload.get("id", "")).strip() or uuid4().hex,
@@ -350,6 +303,9 @@ def normalize_audit_entry(payload: dict[str, Any]) -> dict[str, Any]:
 class ProfileStore:
     def __init__(self, path: str | Path):
         self.path = Path(path).expanduser()
+        self._lock = threading.Lock()
+        self._cache: dict | None = None
+        self._cache_mtime: float = 0.0
 
     def _empty(self) -> dict[str, Any]:
         return {
@@ -368,6 +324,9 @@ class ProfileStore:
     def _read(self) -> dict[str, Any]:
         if not self.path.exists():
             return self._empty()
+        current_mtime = self.path.stat().st_mtime_ns
+        if self._cache is not None and current_mtime == self._cache_mtime:
+            return copy.deepcopy(self._cache)
         content = self.path.read_text(encoding="utf-8").strip()
         if not content:
             return self._empty()
@@ -387,6 +346,8 @@ class ProfileStore:
         data.setdefault("session_shares", [])
         data.setdefault("workspace_templates", [])
         data.setdefault("supervisor_configs", [])
+        self._cache = copy.deepcopy(data)
+        self._cache_mtime = current_mtime
         return data
 
     def _write(self, data: dict[str, Any]) -> None:
@@ -396,8 +357,14 @@ class ProfileStore:
             handle.write("\n")
             temp_name = handle.name
         Path(temp_name).replace(self.path)
+        self._cache = copy.deepcopy(data)
+        self._cache_mtime = self.path.stat().st_mtime_ns
 
-    def list_profiles(self) -> list[dict[str, Any]]:
+    # ------------------------------------------------------------------
+    # Private unlocked helpers (assume self._lock is already held)
+    # ------------------------------------------------------------------
+
+    def _list_profiles_unlocked(self) -> list[dict[str, Any]]:
         raw_profiles = self._read().get("profiles", [])
         profiles: list[dict[str, Any]] = []
         for item in raw_profiles:
@@ -412,10 +379,10 @@ class ProfileStore:
             ),
         )
 
-    def get_profile(self, name: str) -> dict[str, Any]:
+    def _get_profile_unlocked(self, name: str) -> dict[str, Any]:
         if not name.strip():
             raise ValueError("profile name is required")
-        for profile in self.list_profiles():
+        for profile in self._list_profiles_unlocked():
             if profile["name"] == name:
                 return profile
         raise RuntimeError(f"profile not found: {name}")
@@ -662,7 +629,6 @@ class ProfileStore:
         if desired_status and desired_status not in TODO_STATUSES:
             allowed = ", ".join(sorted(TODO_STATUSES))
             raise ValueError(f"todo status must be one of: {allowed}")
-
         todos = self._read().get("todos", [])
         result: list[dict[str, Any]] = []
         for item in todos:
@@ -678,16 +644,16 @@ class ProfileStore:
             result.append(todo)
         return result
 
-    def get_todo(self, todo_id: str) -> dict[str, Any]:
+    def _get_todo_unlocked(self, todo_id: str) -> dict[str, Any]:
         cleaned_id = str(todo_id).strip()
         if not cleaned_id:
             raise ValueError("todo id is required")
-        for todo in self.list_todos():
+        for todo in self._list_todos_unlocked():
             if todo["id"] == cleaned_id:
                 return todo
         raise RuntimeError(f"todo not found: {cleaned_id}")
 
-    def save_todo(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _save_todo_unlocked(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = self._read()
         todo_id = str(payload.get("id", "")).strip()
         existing: dict[str, Any] | None = None
@@ -740,231 +706,7 @@ class ProfileStore:
         self._write(data)
         return todo
 
-    def delete_todo(self, todo_id: str) -> None:
-        cleaned_id = str(todo_id).strip()
-        if not cleaned_id:
-            raise ValueError("todo id is required")
-        data = self._read()
-        todos = [
-            item for item in data.get("todos", []) if not isinstance(item, dict) or str(item.get("id", "")).strip() != cleaned_id
-        ]
-        if len(todos) == len(data.get("todos", [])):
-            raise RuntimeError(f"todo not found: {cleaned_id}")
-        data["todos"] = todos
-        self._write(data)
-
-    def clear_completed_todos(
-        self,
-        profile_name: str = "",
-        target: str = "",
-        keep_recent: int = 5,
-        min_age_days: int = 0,
-    ) -> list[dict[str, Any]]:
-        profile_value = str(profile_name).strip()
-        target_value = str(target).strip()
-        keep_recent_value = max(int(keep_recent), 0)
-        min_age_days_value = max(int(min_age_days), 0)
-        data = self._read()
-        scoped_completed: list[dict[str, Any]] = []
-        for item in data.get("todos", []):
-            if not isinstance(item, dict):
-                continue
-            todo = normalize_todo(item)
-            matches_scope = (not profile_value or todo["profile"] == profile_value) and (not target_value or todo["target"] == target_value)
-            if matches_scope and todo["status"] in {"done", "verified"}:
-                completed_at = parse_utc(todo.get("verified_at")) or parse_utc(todo.get("updated_at")) or parse_utc(todo.get("created_at"))
-                scoped_completed.append({**todo, "_completed_at": completed_at})
-
-        protected_ids = {
-            item["id"]
-            for item in sorted(
-                scoped_completed,
-                key=lambda todo: (todo.get("_completed_at") or datetime.min.replace(tzinfo=timezone.utc), str(todo.get("updated_at", ""))),
-                reverse=True,
-            )[:keep_recent_value]
-        }
-        cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days_value)
-
-        removed: list[dict[str, Any]] = []
-        remaining: list[Any] = []
-        for item in data.get("todos", []):
-            if not isinstance(item, dict):
-                remaining.append(item)
-                continue
-            todo = normalize_todo(item)
-            matches_scope = (not profile_value or todo["profile"] == profile_value) and (not target_value or todo["target"] == target_value)
-            if not matches_scope or todo["status"] not in {"done", "verified"}:
-                remaining.append(item)
-                continue
-            if todo["id"] in protected_ids:
-                remaining.append(item)
-                continue
-            completed_at = parse_utc(todo.get("verified_at")) or parse_utc(todo.get("updated_at")) or parse_utc(todo.get("created_at"))
-            if completed_at and completed_at > cutoff:
-                remaining.append(item)
-                continue
-            removed.append(todo)
-
-        data["todos"] = remaining
-        if removed:
-            self._write(data)
-        return removed
-
-    def update_todo_status(self, todo_id: str, status: str, progress_note: str = "", actor: str = "") -> dict[str, Any]:
-        todo = self.get_todo(todo_id)
-        current_status = str(todo.get("status", "todo")).strip().lower()
-        status_value = normalize_todo_status(status)
-        note = str(progress_note).strip()
-        actor_value = str(actor).strip()
-        evidence_count = len(todo.get("evidence", []) or [])
-        if status_value in {"done", "verified"} and evidence_count <= 0:
-            raise ValueError("cannot set done/verified without evidence")
-        if status_value == "verified" and current_status not in {"done", "verified"}:
-            raise ValueError("todo can be verified only after it is done")
-        todo["status"] = status_value
-        if note:
-            todo["progress_note"] = note
-        if status_value == "verified":
-            todo["verified_by"] = actor_value or "reviewer"
-            todo["verified_at"] = utc_now()
-        event = normalize_todo_event(
-            {
-                "type": "status",
-                "status": status_value,
-                "note": note,
-                "actor": actor_value,
-                "created_at": utc_now(),
-            }
-        )
-        todo["events"] = [event, *(todo.get("events", []) or [])]
-        return self.save_todo(todo)
-
-    def append_todo_evidence(self, todo_id: str, evidence: Any, actor: str = "") -> dict[str, Any]:
-        todo = self.get_todo(todo_id)
-        evidence_item = normalize_todo_evidence(evidence)
-        todo["evidence"] = [evidence_item, *(todo.get("evidence", []) or [])]
-        note = evidence_item["content"][:120]
-        event = normalize_todo_event(
-            {
-                "type": "evidence",
-                "status": todo.get("status", ""),
-                "note": note,
-                "actor": str(actor).strip(),
-                "created_at": evidence_item["created_at"],
-            }
-        )
-        todo["events"] = [event, *(todo.get("events", []) or [])]
-        return self.save_todo(todo)
-
-    def todo_summary(self, profile_name: str = "", target: str = "") -> list[dict[str, Any]]:
-        grouped: dict[tuple[str, str], dict[str, Any]] = {}
-        for todo in self.list_todos(profile_name=profile_name, target=target):
-            key = (todo["profile"], todo["target"])
-            summary = grouped.get(
-                key,
-                {
-                    "profile": todo["profile"],
-                    "target": todo["target"],
-                    "alias": todo.get("alias", ""),
-                    "todo_count": 0,
-                    "in_progress_count": 0,
-                    "last_updated_at": "",
-                    "last_status": "",
-                    "last_note": "",
-                    "last_actor": "",
-                    "last_title": "",
-                },
-            )
-            summary["todo_count"] += 1
-            if todo.get("status") == "in_progress":
-                summary["in_progress_count"] += 1
-            updated_at = str(todo.get("updated_at", "")).strip()
-            if updated_at >= str(summary.get("last_updated_at", "")):
-                summary["last_updated_at"] = updated_at
-                summary["last_status"] = str(todo.get("status", ""))
-                summary["last_title"] = str(todo.get("title", ""))
-                summary["alias"] = str(todo.get("alias", "")) or str(summary.get("alias", ""))
-                events = todo.get("events", []) or []
-                if events and isinstance(events[0], dict):
-                    summary["last_note"] = str(events[0].get("note", "")).strip()
-                    summary["last_actor"] = str(events[0].get("actor", "")).strip()
-                else:
-                    summary["last_note"] = str(todo.get("progress_note", "")).strip()
-            grouped[key] = summary
-        return sorted(
-            grouped.values(),
-            key=lambda item: (str(item.get("last_updated_at", "")), str(item.get("target", ""))),
-            reverse=True,
-        )
-
-    def list_todo_templates(self, profile_name: str = "", target: str = "") -> list[dict[str, Any]]:
-        templates = self._read().get("todo_templates", [])
-        result: list[dict[str, Any]] = []
-        for item in templates:
-            if not isinstance(item, dict):
-                continue
-            template = normalize_todo_template(item)
-            if profile_name and template["profile"] not in {"", profile_name}:
-                continue
-            if target and template["target"] not in {"", target}:
-                continue
-            result.append(template)
-        return sorted(result, key=lambda item: (item["profile"] != "", item["target"] != "", item["name"].lower()))
-
-    def save_todo_template(self, payload: dict[str, Any]) -> dict[str, Any]:
-        template = normalize_todo_template(payload)
-        if not template["name"]:
-            raise ValueError("todo template name is required")
-        if not template["title"]:
-            raise ValueError("todo template title is required")
-        data = self._read()
-        now = utc_now()
-        existing: dict[str, Any] | None = None
-        for item in data.get("todo_templates", []):
-            if isinstance(item, dict) and str(item.get("id", "")) == template["id"]:
-                existing = normalize_todo_template(item)
-                break
-        template["created_at"] = existing.get("created_at", now) if existing else now
-        template["updated_at"] = now
-        templates = [
-            item
-            for item in data.get("todo_templates", [])
-            if not isinstance(item, dict) or str(item.get("id", "")) != template["id"]
-        ]
-        templates.append(template)
-        data["todo_templates"] = templates
-        self._write(data)
-        return template
-
-    def delete_todo_template(self, template_id: str) -> None:
-        cleaned_id = str(template_id).strip()
-        if not cleaned_id:
-            raise ValueError("todo template id is required")
-        data = self._read()
-        templates = [
-            item
-            for item in data.get("todo_templates", [])
-            if not isinstance(item, dict) or str(item.get("id", "")) != cleaned_id
-        ]
-        if len(templates) == len(data.get("todo_templates", [])):
-            raise RuntimeError(f"todo template not found: {cleaned_id}")
-        data["todo_templates"] = templates
-        self._write(data)
-
-    def record_audit(self, payload: dict[str, Any], limit: int = 2000) -> dict[str, Any]:
-        entry = normalize_audit_entry(payload)
-        if not entry["action"]:
-            raise ValueError("audit action is required")
-        data = self._read()
-        history = [entry]
-        for item in data.get("audit_logs", []):
-            if isinstance(item, dict):
-                history.append(normalize_audit_entry(item))
-        data["audit_logs"] = history[: max(1, limit)]
-        self._write(data)
-        return entry
-
-    def list_audit_logs(self, profile_name: str = "", target: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    def _list_audit_logs_unlocked(self, profile_name: str = "", target: str = "", limit: int = 100) -> list[dict[str, Any]]:
         logs = self._read().get("audit_logs", [])
         result: list[dict[str, Any]] = []
         for item in logs:
@@ -980,117 +722,19 @@ class ProfileStore:
                 break
         return result
 
-    def quick_create_todo(self, payload: dict[str, Any]) -> dict[str, Any]:
-        title = str(payload.get("title", "")).strip()
-        if not title:
-            raise ValueError("todo title is required")
-        profile = str(payload.get("profile", "")).strip()
-        target = str(payload.get("target", "")).strip()
-        if not profile:
-            raise ValueError("todo profile is required")
-        if not target:
-            raise ValueError("todo target is required")
-        quick_todo = {
-            "title": title,
-            "detail": str(payload.get("detail", "")).strip(),
-            "profile": profile,
-            "target": target,
-            "alias": str(payload.get("alias", "")).strip(),
-            "priority": str(payload.get("priority", "medium")).strip() or "medium",
-            "assignee": str(payload.get("assignee", "")).strip(),
-            "role": str(payload.get("role", "general")).strip() or "general",
-            "status": "todo",
-        }
-        handoff = payload.get("handoff_packet", {})
-        if isinstance(handoff, dict) and any(str(handoff.get(k, "")).strip() for k in ("context", "constraints", "acceptance", "rollback")):
-            quick_todo["handoff_packet"] = handoff
-        return self.save_todo(quick_todo)
+    def _list_supervisor_configs_unlocked(self, profile_name: str = "") -> list[dict[str, Any]]:
+        configs = self._read().get("supervisor_configs", [])
+        result: list[dict[str, Any]] = []
+        for item in configs:
+            if not isinstance(item, dict):
+                continue
+            config = normalize_supervisor_config(item)
+            if profile_name and config["profile"] not in {"", profile_name}:
+                continue
+            result.append(config)
+        return sorted(result, key=lambda item: (item["profile"] != "", item["name"].lower()))
 
-    def create_workflow_triplet(self, payload: dict[str, Any]) -> dict[str, Any]:
-        title = str(payload.get("title", "")).strip()
-        profile = str(payload.get("profile", "")).strip()
-        if not title:
-            raise ValueError("workflow title is required")
-        if not profile:
-            raise ValueError("workflow profile is required")
-        workflow_id = str(payload.get("workflow_id", "")).strip() or uuid4().hex
-        default_target = str(payload.get("target", "")).strip()
-        if not default_target:
-            raise ValueError("workflow target is required")
-        handoff_packet = normalize_handoff_packet(payload.get("handoff_packet", {}))
-        planner_target = str(payload.get("planner_target", "")).strip() or default_target
-        executor_target = str(payload.get("executor_target", "")).strip() or default_target
-        reviewer_target = str(payload.get("reviewer_target", "")).strip() or default_target
-        priority = normalize_todo_priority(payload.get("priority", "medium"))
-
-        planner = self.save_todo(
-            {
-                "title": f"[planner] {title}",
-                "detail": str(payload.get("detail", "")).strip(),
-                "profile": profile,
-                "target": planner_target,
-                "alias": str(payload.get("planner_alias", "")).strip(),
-                "role": "planner",
-                "priority": priority,
-                "status": "todo",
-                "workflow_id": workflow_id,
-                "handoff_packet": handoff_packet,
-            }
-        )
-        executor = self.save_todo(
-            {
-                "title": f"[executor] {title}",
-                "detail": str(payload.get("detail", "")).strip(),
-                "profile": profile,
-                "target": executor_target,
-                "alias": str(payload.get("executor_alias", "")).strip(),
-                "role": "executor",
-                "priority": priority,
-                "status": "todo",
-                "workflow_id": workflow_id,
-                "parent_todo_id": planner["id"],
-                "blocked_by": [planner["id"]],
-                "handoff_packet": handoff_packet,
-            }
-        )
-        reviewer = self.save_todo(
-            {
-                "title": f"[reviewer] {title}",
-                "detail": str(payload.get("detail", "")).strip(),
-                "profile": profile,
-                "target": reviewer_target,
-                "alias": str(payload.get("reviewer_alias", "")).strip(),
-                "role": "reviewer",
-                "priority": priority,
-                "status": "todo",
-                "workflow_id": workflow_id,
-                "parent_todo_id": executor["id"],
-                "blocked_by": [executor["id"]],
-                "handoff_packet": handoff_packet,
-            }
-        )
-        return {"workflow_id": workflow_id, "todos": [planner, executor, reviewer]}
-
-    def list_workflow_todos(self, workflow_id: str) -> list[dict[str, Any]]:
-        cleaned = str(workflow_id).strip()
-        if not cleaned:
-            raise ValueError("workflow_id is required")
-        role_order = {"planner": 0, "executor": 1, "reviewer": 2, "general": 3}
-        todos = [todo for todo in self.list_todos() if str(todo.get("workflow_id", "")).strip() == cleaned]
-        return sorted(
-            todos,
-            key=lambda item: (role_order.get(str(item.get("role", "general")), 9), str(item.get("created_at", ""))),
-        )
-
-    def _share_is_active(self, share: dict[str, Any]) -> bool:
-        if str(share.get("revoked_at", "")).strip():
-            return False
-        expires_at = parse_utc(share.get("expires_at"))
-        if expires_at is None:
-            return True
-        return expires_at > datetime.now(timezone.utc)
-
-    def list_session_shares(self, profile_name: str = "", target: str = "", include_expired: bool = False) -> list[dict[str, Any]]:
+    def _list_session_shares_unlocked(self, profile_name: str = "", target: str = "", include_expired: bool = False) -> list[dict[str, Any]]:
         shares = self._read().get("session_shares", [])
         result: list[dict[str, Any]] = []
         for item in shares:
@@ -1106,306 +750,922 @@ class ProfileStore:
             result.append(share)
         return result
 
-    def create_session_share(self, payload: dict[str, Any]) -> dict[str, Any]:
-        share = normalize_share_link(payload)
-        if not share["profile"]:
-            raise ValueError("share profile is required")
-        if not share["target"]:
-            raise ValueError("share target is required")
-        if not share["expires_at"]:
-            expires_in_minutes = optional_non_negative_int(payload.get("expires_in_minutes", 60), "expires_in_minutes")
-            if expires_in_minutes <= 0:
-                expires_in_minutes = 60
-            share["expires_at"] = (
-                datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes)
-            ).isoformat(timespec="seconds").replace("+00:00", "Z")
-        now = utc_now()
-        share["updated_at"] = now
-        data = self._read()
-        existing = None
-        for item in data.get("session_shares", []):
-            if isinstance(item, dict) and str(item.get("id", "")).strip() == share["id"]:
-                existing = normalize_share_link(item)
-                break
-        share["created_at"] = existing.get("created_at", now) if existing else now
-        shares = [
-            item
-            for item in data.get("session_shares", [])
-            if not isinstance(item, dict) or str(item.get("id", "")).strip() != share["id"]
-        ]
-        shares.append(share)
-        data["session_shares"] = shares
-        self._write(data)
-        return share
+    # ------------------------------------------------------------------
+    # Public API (all acquire self._lock)
+    # ------------------------------------------------------------------
 
-    def revoke_session_share(self, share_id: str = "", token: str = "") -> dict[str, Any]:
-        cleaned_id = str(share_id).strip()
-        cleaned_token = str(token).strip()
-        if not cleaned_id and not cleaned_token:
-            raise ValueError("share id or token is required")
-        data = self._read()
-        shares = data.get("session_shares", [])
-        updated: dict[str, Any] | None = None
-        next_shares: list[dict[str, Any]] = []
-        for item in shares:
-            if not isinstance(item, dict):
-                continue
-            share = normalize_share_link(item)
-            if (cleaned_id and share["id"] == cleaned_id) or (cleaned_token and share["token"] == cleaned_token):
-                share["revoked_at"] = utc_now()
-                share["updated_at"] = share["revoked_at"]
-                updated = share
-            next_shares.append(share)
-        if not updated:
-            raise RuntimeError("share link not found")
-        data["session_shares"] = next_shares
-        self._write(data)
-        return updated
+    def list_profiles(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return self._list_profiles_unlocked()
 
-    def resolve_session_share(self, token: str) -> dict[str, Any]:
-        cleaned = str(token).strip()
-        if not cleaned:
-            raise ValueError("share token is required")
-        for share in self.list_session_shares(include_expired=True):
-            if share["token"] != cleaned:
-                continue
-            if not self._share_is_active(share):
-                raise RuntimeError("share link expired or revoked")
-            return share
-        raise RuntimeError("share link not found")
+    def get_profile(self, name: str) -> dict[str, Any]:
+        with self._lock:
+            return self._get_profile_unlocked(name)
 
-    def list_workspace_templates(self, profile_name: str = "", target: str = "") -> list[dict[str, Any]]:
-        templates = self._read().get("workspace_templates", [])
-        result: list[dict[str, Any]] = []
-        for item in templates:
-            if not isinstance(item, dict):
-                continue
-            template = normalize_workspace_template(item)
-            if profile_name and template["profile"] not in {"", profile_name}:
-                continue
-            if target and template["target"] not in {"", target}:
-                continue
-            result.append(template)
-        return sorted(result, key=lambda item: (item["profile"] != "", item["target"] != "", item["name"].lower()))
+    def save_profile(self, profile: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            normalized = normalize_profile(profile)
+            existing: dict[str, Any] | None = None
+            try:
+                existing = self._get_profile_unlocked(normalized["name"])
+            except RuntimeError:
+                existing = None
 
-    def save_workspace_template(self, payload: dict[str, Any]) -> dict[str, Any]:
-        template = normalize_workspace_template(payload)
-        if not template["name"]:
-            raise ValueError("workspace template name is required")
-        data = self._read()
-        now = utc_now()
-        existing = None
-        for item in data.get("workspace_templates", []):
-            if isinstance(item, dict) and str(item.get("id", "")).strip() == template["id"]:
-                existing = normalize_workspace_template(item)
-                break
-        template["created_at"] = existing.get("created_at", now) if existing else now
-        template["updated_at"] = now
-        templates = [
-            item
-            for item in data.get("workspace_templates", [])
-            if not isinstance(item, dict) or str(item.get("id", "")).strip() != template["id"]
-        ]
-        templates.append(template)
-        data["workspace_templates"] = templates
-        self._write(data)
-        return template
+            if existing and not normalized["password"] and not normalized["password_ref"]:
+                normalized["password"] = str(existing.get("password", ""))
+                normalized["password_ref"] = str(existing.get("password_ref", "")).strip()
+            if normalized["password"] and normalized["password_ref"]:
+                raise ValueError("profile password and password_ref cannot both be set")
+            if not normalized["name"]:
+                raise ValueError("profile name is required")
+            if not normalized["host"]:
+                raise ValueError("profile host is required")
+            if not normalized["username"]:
+                raise ValueError("profile username is required")
+            if normalized["port"] <= 0:
+                raise ValueError("profile port must be positive")
+            if normalized["host_key_policy"] not in PROFILE_HOST_KEY_POLICIES:
+                allowed = ", ".join(sorted(policy for policy in PROFILE_HOST_KEY_POLICIES if policy))
+                raise ValueError(f"profile host_key_policy must be empty or one of: {allowed}")
 
-    def delete_workspace_template(self, template_id: str) -> None:
-        cleaned = str(template_id).strip()
-        if not cleaned:
-            raise ValueError("workspace template id is required")
-        data = self._read()
-        templates = [
-            item
-            for item in data.get("workspace_templates", [])
-            if not isinstance(item, dict) or str(item.get("id", "")).strip() != cleaned
-        ]
-        if len(templates) == len(data.get("workspace_templates", [])):
-            raise RuntimeError(f"workspace template not found: {cleaned}")
-        data["workspace_templates"] = templates
-        self._write(data)
+            now = utc_now()
+            normalized["created_at"] = existing.get("created_at", now) if existing else now
+            normalized["updated_at"] = now
 
-    def list_supervisor_configs(self, profile_name: str = "") -> list[dict[str, Any]]:
-        configs = self._read().get("supervisor_configs", [])
-        result: list[dict[str, Any]] = []
-        for item in configs:
-            if not isinstance(item, dict):
-                continue
-            config = normalize_supervisor_config(item)
-            if profile_name and config["profile"] not in {"", profile_name}:
-                continue
-            result.append(config)
-        return sorted(result, key=lambda item: (item["profile"] != "", item["name"].lower()))
+            data = self._read()
+            profiles = [
+                item
+                for item in data.get("profiles", [])
+                if isinstance(item, dict) and item.get("name") != normalized["name"]
+            ]
+            profiles.append(normalized)
+            data["profiles"] = sorted(profiles, key=lambda item: str(item.get("name", "")).lower())
+            self._write(data)
+            return normalized
 
-    def get_supervisor_config(self, config_id: str = "", profile_name: str = "") -> dict[str, Any]:
-        cleaned_id = str(config_id).strip()
-        configs = self.list_supervisor_configs(profile_name=profile_name)
-        if cleaned_id:
-            for config in configs:
-                if config["id"] == cleaned_id:
-                    return config
-            raise RuntimeError(f"supervisor config not found: {cleaned_id}")
-        if configs:
-            return configs[0]
-        raise RuntimeError("supervisor config not found")
+    def delete_profile(self, name: str) -> None:
+        with self._lock:
+            data = self._read()
+            profiles = [
+                item
+                for item in data.get("profiles", [])
+                if isinstance(item, dict) and item.get("name") != name
+            ]
+            if len(profiles) == len(data.get("profiles", [])):
+                raise RuntimeError(f"profile not found: {name}")
+            data["profiles"] = profiles
+            aliases = data.get("aliases", {})
+            if isinstance(aliases, dict):
+                aliases.pop(name, None)
+            data["aliases"] = aliases
+            templates = data.get("templates", [])
+            data["templates"] = [
+                item for item in templates if not isinstance(item, dict) or str(item.get("profile", "")).strip() != name
+            ]
+            history = data.get("history", [])
+            data["history"] = [
+                item for item in history if not isinstance(item, dict) or str(item.get("profile", "")).strip() != name
+            ]
+            todos = data.get("todos", [])
+            data["todos"] = [
+                item for item in todos if not isinstance(item, dict) or str(item.get("profile", "")).strip() != name
+            ]
+            todo_templates = data.get("todo_templates", [])
+            data["todo_templates"] = [
+                item for item in todo_templates if not isinstance(item, dict) or str(item.get("profile", "")).strip() != name
+            ]
+            audit_logs = data.get("audit_logs", [])
+            data["audit_logs"] = [
+                item for item in audit_logs if not isinstance(item, dict) or str(item.get("profile", "")).strip() != name
+            ]
+            session_shares = data.get("session_shares", [])
+            data["session_shares"] = [
+                item for item in session_shares if not isinstance(item, dict) or str(item.get("profile", "")).strip() != name
+            ]
+            workspace_templates = data.get("workspace_templates", [])
+            data["workspace_templates"] = [
+                item
+                for item in workspace_templates
+                if not isinstance(item, dict) or str(item.get("profile", "")).strip() != name
+            ]
+            supervisor_configs = data.get("supervisor_configs", [])
+            data["supervisor_configs"] = [
+                item
+                for item in supervisor_configs
+                if not isinstance(item, dict) or str(item.get("profile", "")).strip() not in {name}
+            ]
+            self._write(data)
 
-    def save_supervisor_config(self, payload: dict[str, Any]) -> dict[str, Any]:
-        config = normalize_supervisor_config(payload)
-        if not config["name"]:
-            raise ValueError("supervisor config name is required")
-        data = self._read()
-        now = utc_now()
-        existing = None
-        for item in data.get("supervisor_configs", []):
-            if isinstance(item, dict) and str(item.get("id", "")).strip() == config["id"]:
-                existing = normalize_supervisor_config(item)
-                break
-        if existing and not config["api_key"] and not config["api_key_ref"]:
-            config["api_key"] = str(existing.get("api_key", ""))
-            config["api_key_ref"] = str(existing.get("api_key_ref", "")).strip()
-        config["created_at"] = existing.get("created_at", now) if existing else now
-        config["updated_at"] = now
-        configs = [
-            item
-            for item in data.get("supervisor_configs", [])
-            if not isinstance(item, dict) or str(item.get("id", "")).strip() != config["id"]
-        ]
-        configs.append(config)
-        data["supervisor_configs"] = configs
-        self._write(data)
-        return config
+    def aliases_for(self, profile_name: str) -> dict[str, str]:
+        with self._lock:
+            aliases = self._read().get("aliases", {})
+            if not isinstance(aliases, dict):
+                return {}
+            profile_aliases = aliases.get(profile_name, {})
+            if not isinstance(profile_aliases, dict):
+                return {}
+            return {str(key): str(value) for key, value in profile_aliases.items()}
 
-    def delete_supervisor_config(self, config_id: str) -> None:
-        cleaned = str(config_id).strip()
-        if not cleaned:
-            raise ValueError("supervisor config id is required")
-        data = self._read()
-        configs = [
-            item
-            for item in data.get("supervisor_configs", [])
-            if not isinstance(item, dict) or str(item.get("id", "")).strip() != cleaned
-        ]
-        if len(configs) == len(data.get("supervisor_configs", [])):
-            raise RuntimeError(f"supervisor config not found: {cleaned}")
-        data["supervisor_configs"] = configs
-        self._write(data)
+    def set_alias(self, profile_name: str, target: str, alias: str) -> None:
+        with self._lock:
+            if not profile_name.strip():
+                raise ValueError("profile name is required")
+            if not target.strip():
+                raise ValueError("target is required")
+            data = self._read()
+            aliases = data.setdefault("aliases", {})
+            if not isinstance(aliases, dict):
+                aliases = {}
+                data["aliases"] = aliases
+            profile_aliases = aliases.setdefault(profile_name, {})
+            if not isinstance(profile_aliases, dict):
+                profile_aliases = {}
+                aliases[profile_name] = profile_aliases
+            cleaned_alias = alias.strip()
+            if cleaned_alias:
+                profile_aliases[target] = cleaned_alias
+            else:
+                profile_aliases.pop(target, None)
+            self._write(data)
 
-    def list_events(self, profile_name: str = "", target: str = "", limit: int = 200) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        for entry in self.list_audit_logs(profile_name=profile_name, target=target, limit=max(1, limit * 2)):
-            result.append(
+    def list_templates(self, profile_name: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            templates = self._read().get("templates", [])
+            result: list[dict[str, Any]] = []
+            for item in templates:
+                if not isinstance(item, dict):
+                    continue
+                template = normalize_template(item)
+                if profile_name and template["profile"] not in {"", profile_name}:
+                    continue
+                result.append(template)
+            return sorted(result, key=lambda item: (item["profile"] != "", item["name"].lower()))
+
+    def save_template(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            template = normalize_template(payload)
+            if not template["name"]:
+                raise ValueError("template name is required")
+            if not template["command"]:
+                raise ValueError("template command is required")
+            data = self._read()
+            now = utc_now()
+            existing: dict[str, Any] | None = None
+            for item in data.get("templates", []):
+                if isinstance(item, dict) and str(item.get("id", "")) == template["id"]:
+                    existing = normalize_template(item)
+                    break
+            template["created_at"] = existing.get("created_at", now) if existing else now
+            template["updated_at"] = now
+            templates = [
+                item for item in data.get("templates", []) if not isinstance(item, dict) or str(item.get("id", "")) != template["id"]
+            ]
+            templates.append(template)
+            data["templates"] = templates
+            self._write(data)
+            return template
+
+    def delete_template(self, template_id: str) -> None:
+        with self._lock:
+            if not template_id.strip():
+                raise ValueError("template id is required")
+            data = self._read()
+            templates = [
+                item for item in data.get("templates", []) if not isinstance(item, dict) or str(item.get("id", "")) != template_id
+            ]
+            if len(templates) == len(data.get("templates", [])):
+                raise RuntimeError(f"template not found: {template_id}")
+            data["templates"] = templates
+            self._write(data)
+
+    def record_history(self, payload: dict[str, Any], limit: int = 200) -> dict[str, Any]:
+        with self._lock:
+            entry = {
+                "id": uuid4().hex,
+                "profile": str(payload.get("profile", "")).strip(),
+                "target": str(payload.get("target", "")).strip(),
+                "alias": str(payload.get("alias", "")).strip(),
+                "command": str(payload.get("command", "")).strip(),
+                "created_at": utc_now(),
+            }
+            if not entry["profile"]:
+                raise ValueError("history profile is required")
+            if not entry["target"]:
+                raise ValueError("history target is required")
+            if not entry["command"]:
+                raise ValueError("history command is required")
+            data = self._read()
+            history = [entry]
+            for item in data.get("history", []):
+                if isinstance(item, dict):
+                    history.append(item)
+            data["history"] = history[: max(1, limit)]
+            self._write(data)
+            return entry
+
+    def list_history(self, profile_name: str = "", limit: int = 20) -> list[dict[str, Any]]:
+        with self._lock:
+            history = self._read().get("history", [])
+            result: list[dict[str, Any]] = []
+            for item in history:
+                if not isinstance(item, dict):
+                    continue
+                if profile_name and str(item.get("profile", "")).strip() != profile_name:
+                    continue
+                result.append({
+                    "id": str(item.get("id", "")).strip(),
+                    "profile": str(item.get("profile", "")).strip(),
+                    "target": str(item.get("target", "")).strip(),
+                    "alias": str(item.get("alias", "")).strip(),
+                    "command": str(item.get("command", "")).strip(),
+                    "created_at": str(item.get("created_at", "")).strip(),
+                })
+                if len(result) >= max(1, limit):
+                    break
+            return result
+
+    def clear_history(self, profile_name: str = "") -> None:
+        with self._lock:
+            data = self._read()
+            if not profile_name:
+                data["history"] = []
+            else:
+                data["history"] = [
+                    item
+                    for item in data.get("history", [])
+                    if not isinstance(item, dict) or str(item.get("profile", "")).strip() != profile_name
+                ]
+            self._write(data)
+
+    def list_todos(self, profile_name: str = "", target: str = "", status: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            return self._list_todos_unlocked(profile_name=profile_name, target=target, status=status)
+
+    def get_todo(self, todo_id: str) -> dict[str, Any]:
+        with self._lock:
+            return self._get_todo_unlocked(todo_id)
+
+    def save_todo(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            return self._save_todo_unlocked(payload)
+
+    def delete_todo(self, todo_id: str) -> None:
+        with self._lock:
+            cleaned_id = str(todo_id).strip()
+            if not cleaned_id:
+                raise ValueError("todo id is required")
+            data = self._read()
+            todos = [
+                item for item in data.get("todos", []) if not isinstance(item, dict) or str(item.get("id", "")).strip() != cleaned_id
+            ]
+            if len(todos) == len(data.get("todos", [])):
+                raise RuntimeError(f"todo not found: {cleaned_id}")
+            data["todos"] = todos
+            self._write(data)
+
+    def clear_completed_todos(
+        self,
+        profile_name: str = "",
+        target: str = "",
+        keep_recent: int = 5,
+        min_age_days: int = 0,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            profile_value = str(profile_name).strip()
+            target_value = str(target).strip()
+            keep_recent_value = max(int(keep_recent), 0)
+            min_age_days_value = max(int(min_age_days), 0)
+            data = self._read()
+            scoped_completed: list[dict[str, Any]] = []
+            for item in data.get("todos", []):
+                if not isinstance(item, dict):
+                    continue
+                todo = normalize_todo(item)
+                matches_scope = (not profile_value or todo["profile"] == profile_value) and (not target_value or todo["target"] == target_value)
+                if matches_scope and todo["status"] in {"done", "verified"}:
+                    completed_at = parse_utc(todo.get("verified_at")) or parse_utc(todo.get("updated_at")) or parse_utc(todo.get("created_at"))
+                    scoped_completed.append({**todo, "_completed_at": completed_at})
+
+            protected_ids = {
+                item["id"]
+                for item in sorted(
+                    scoped_completed,
+                    key=lambda todo: (todo.get("_completed_at") or datetime.min.replace(tzinfo=timezone.utc), str(todo.get("updated_at", ""))),
+                    reverse=True,
+                )[:keep_recent_value]
+            }
+            cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days_value)
+
+            removed: list[dict[str, Any]] = []
+            remaining: list[Any] = []
+            for item in data.get("todos", []):
+                if not isinstance(item, dict):
+                    remaining.append(item)
+                    continue
+                todo = normalize_todo(item)
+                matches_scope = (not profile_value or todo["profile"] == profile_value) and (not target_value or todo["target"] == target_value)
+                if not matches_scope or todo["status"] not in {"done", "verified"}:
+                    remaining.append(item)
+                    continue
+                if todo["id"] in protected_ids:
+                    remaining.append(item)
+                    continue
+                completed_at = parse_utc(todo.get("verified_at")) or parse_utc(todo.get("updated_at")) or parse_utc(todo.get("created_at"))
+                if completed_at and completed_at > cutoff:
+                    remaining.append(item)
+                    continue
+                removed.append(todo)
+
+            data["todos"] = remaining
+            if removed:
+                self._write(data)
+            return removed
+
+    def update_todo_status(self, todo_id: str, status: str, progress_note: str = "", actor: str = "") -> dict[str, Any]:
+        with self._lock:
+            todo = self._get_todo_unlocked(todo_id)
+            current_status = str(todo.get("status", "todo")).strip().lower()
+            status_value = normalize_todo_status(status)
+            note = str(progress_note).strip()
+            actor_value = str(actor).strip()
+            evidence_count = len(todo.get("evidence", []) or [])
+            if status_value in {"done", "verified"} and evidence_count <= 0:
+                raise ValueError("cannot set done/verified without evidence")
+            if status_value == "verified" and current_status not in {"done", "verified"}:
+                raise ValueError("todo can be verified only after it is done")
+            todo["status"] = status_value
+            if note:
+                todo["progress_note"] = note
+            if status_value == "verified":
+                todo["verified_by"] = actor_value or "reviewer"
+                todo["verified_at"] = utc_now()
+            event = normalize_todo_event(
                 {
-                    "id": entry["id"],
-                    "source": "audit",
-                    "action": entry["action"],
-                    "profile": entry["profile"],
-                    "target": entry["target"],
-                    "todo_id": entry.get("todo_id", ""),
-                    "status": entry.get("status", ""),
-                    "actor": entry.get("actor", ""),
-                    "note": entry.get("note", ""),
-                    "created_at": entry["created_at"],
+                    "type": "status",
+                    "status": status_value,
+                    "note": note,
+                    "actor": actor_value,
+                    "created_at": utc_now(),
                 }
             )
-        for todo in self.list_todos(profile_name=profile_name, target=target):
-            for event in todo.get("events", []) or []:
-                if not isinstance(event, dict):
-                    continue
-                normalized_event = normalize_todo_event(event)
-                result.append(
+            todo["events"] = [event, *(todo.get("events", []) or [])]
+            return self._save_todo_unlocked(todo)
+
+    def append_todo_evidence(self, todo_id: str, evidence: Any, actor: str = "") -> dict[str, Any]:
+        with self._lock:
+            todo = self._get_todo_unlocked(todo_id)
+            evidence_item = normalize_todo_evidence(evidence)
+            todo["evidence"] = [evidence_item, *(todo.get("evidence", []) or [])]
+            note = evidence_item["content"][:120]
+            event = normalize_todo_event(
+                {
+                    "type": "evidence",
+                    "status": todo.get("status", ""),
+                    "note": note,
+                    "actor": str(actor).strip(),
+                    "created_at": evidence_item["created_at"],
+                }
+            )
+            todo["events"] = [event, *(todo.get("events", []) or [])]
+            return self._save_todo_unlocked(todo)
+
+    def todo_summary(self, profile_name: str = "", target: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            grouped: dict[tuple[str, str], dict[str, Any]] = {}
+            for todo in self._list_todos_unlocked(profile_name=profile_name, target=target):
+                key = (todo["profile"], todo["target"])
+                summary = grouped.get(
+                    key,
                     {
-                        "id": normalized_event["id"],
-                        "source": "todo",
-                        "action": normalized_event["type"],
                         "profile": todo["profile"],
                         "target": todo["target"],
-                        "todo_id": todo["id"],
-                        "status": normalized_event.get("status", ""),
-                        "actor": normalized_event.get("actor", ""),
-                        "note": normalized_event.get("note", ""),
-                        "created_at": normalized_event["created_at"],
-                    }
+                        "alias": todo.get("alias", ""),
+                        "todo_count": 0,
+                        "in_progress_count": 0,
+                        "last_updated_at": "",
+                        "last_status": "",
+                        "last_note": "",
+                        "last_actor": "",
+                        "last_title": "",
+                    },
                 )
-        sorted_events = sorted(
-            result,
-            key=lambda item: (str(item.get("created_at", "")), str(item.get("id", ""))),
-            reverse=True,
-        )
-        return sorted_events[: max(1, limit)]
-
-    def workflow_metrics(self, profile_name: str = "", target: str = "", window_days: int = 30) -> dict[str, Any]:
-        days = max(1, min(int(window_days), 365))
-        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-        todos = self.list_todos(profile_name=profile_name, target=target)
-        dispatch_samples: list[float] = []
-        done_samples: list[float] = []
-        verify_samples: list[float] = []
-        trend: dict[str, dict[str, Any]] = {}
-
-        for todo in todos:
-            created_at = parse_utc(todo.get("created_at"))
-            if not created_at or created_at < cutoff:
-                continue
-            in_progress_at: datetime | None = None
-            done_at: datetime | None = None
-            verified_at: datetime | None = parse_utc(todo.get("verified_at"))
-            for event in (todo.get("events", []) or []):
-                if not isinstance(event, dict):
-                    continue
-                event_status = str(event.get("status", "")).strip().lower()
-                event_time = parse_utc(event.get("created_at"))
-                if event_time is None:
-                    continue
-                if event_status == "in_progress":
-                    in_progress_at = event_time if in_progress_at is None else min(in_progress_at, event_time)
-                if event_status == "done":
-                    done_at = event_time if done_at is None else min(done_at, event_time)
-                if event_status == "verified":
-                    verified_at = event_time if verified_at is None else min(verified_at, event_time)
-            if in_progress_at and in_progress_at >= created_at:
-                dispatch_samples.append((in_progress_at - created_at).total_seconds())
-            if done_at and done_at >= created_at:
-                done_samples.append((done_at - created_at).total_seconds())
-            if verified_at and done_at and verified_at >= done_at:
-                verify_samples.append((verified_at - done_at).total_seconds())
-
-            week_key = created_at.strftime("%G-W%V")
-            bucket = trend.setdefault(
-                week_key,
-                {"week": week_key, "dispatch_seconds": [], "done_seconds": [], "verify_seconds": [], "count": 0},
+                summary["todo_count"] += 1
+                if todo.get("status") == "in_progress":
+                    summary["in_progress_count"] += 1
+                updated_at = str(todo.get("updated_at", "")).strip()
+                if updated_at >= str(summary.get("last_updated_at", "")):
+                    summary["last_updated_at"] = updated_at
+                    summary["last_status"] = str(todo.get("status", ""))
+                    summary["last_title"] = str(todo.get("title", ""))
+                    summary["alias"] = str(todo.get("alias", "")) or str(summary.get("alias", ""))
+                    events = todo.get("events", []) or []
+                    if events and isinstance(events[0], dict):
+                        summary["last_note"] = str(events[0].get("note", "")).strip()
+                        summary["last_actor"] = str(events[0].get("actor", "")).strip()
+                    else:
+                        summary["last_note"] = str(todo.get("progress_note", "")).strip()
+                grouped[key] = summary
+            return sorted(
+                grouped.values(),
+                key=lambda item: (str(item.get("last_updated_at", "")), str(item.get("target", ""))),
+                reverse=True,
             )
-            bucket["count"] += 1
-            if in_progress_at and in_progress_at >= created_at:
-                bucket["dispatch_seconds"].append((in_progress_at - created_at).total_seconds())
-            if done_at and done_at >= created_at:
-                bucket["done_seconds"].append((done_at - created_at).total_seconds())
-            if verified_at and done_at and verified_at >= done_at:
-                bucket["verify_seconds"].append((verified_at - done_at).total_seconds())
 
-        sends = self.list_audit_logs(profile_name=profile_name, target=target, limit=5000)
-        send_events = [entry for entry in sends if entry.get("action") == "agent.send"]
-        misrouted = 0
-        for entry in send_events:
-            payload = entry.get("payload", {})
-            if isinstance(payload, dict) and bool(payload.get("misroute")):
-                misrouted += 1
+    def list_todo_templates(self, profile_name: str = "", target: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            templates = self._read().get("todo_templates", [])
+            result: list[dict[str, Any]] = []
+            for item in templates:
+                if not isinstance(item, dict):
+                    continue
+                template = normalize_todo_template(item)
+                if profile_name and template["profile"] not in {"", profile_name}:
+                    continue
+                if target and template["target"] not in {"", target}:
+                    continue
+                result.append(template)
+            return sorted(result, key=lambda item: (item["profile"] != "", item["target"] != "", item["name"].lower()))
 
-        trend_rows = []
-        for week in sorted(trend.keys()):
-            row = trend[week]
-            dispatch_avg = sum(row["dispatch_seconds"]) / len(row["dispatch_seconds"]) if row["dispatch_seconds"] else None
-            done_avg = sum(row["done_seconds"]) / len(row["done_seconds"]) if row["done_seconds"] else None
-            verify_avg = sum(row["verify_seconds"]) / len(row["verify_seconds"]) if row["verify_seconds"] else None
-            trend_rows.append(
+    def save_todo_template(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            template = normalize_todo_template(payload)
+            if not template["name"]:
+                raise ValueError("todo template name is required")
+            if not template["title"]:
+                raise ValueError("todo template title is required")
+            data = self._read()
+            now = utc_now()
+            existing: dict[str, Any] | None = None
+            for item in data.get("todo_templates", []):
+                if isinstance(item, dict) and str(item.get("id", "")) == template["id"]:
+                    existing = normalize_todo_template(item)
+                    break
+            template["created_at"] = existing.get("created_at", now) if existing else now
+            template["updated_at"] = now
+            templates = [
+                item
+                for item in data.get("todo_templates", [])
+                if not isinstance(item, dict) or str(item.get("id", "")) != template["id"]
+            ]
+            templates.append(template)
+            data["todo_templates"] = templates
+            self._write(data)
+            return template
+
+    def delete_todo_template(self, template_id: str) -> None:
+        with self._lock:
+            cleaned_id = str(template_id).strip()
+            if not cleaned_id:
+                raise ValueError("todo template id is required")
+            data = self._read()
+            templates = [
+                item
+                for item in data.get("todo_templates", [])
+                if not isinstance(item, dict) or str(item.get("id", "")) != cleaned_id
+            ]
+            if len(templates) == len(data.get("todo_templates", [])):
+                raise RuntimeError(f"todo template not found: {cleaned_id}")
+            data["todo_templates"] = templates
+            self._write(data)
+
+    def record_audit(self, payload: dict[str, Any], limit: int = 2000) -> dict[str, Any]:
+        with self._lock:
+            entry = normalize_audit_entry(payload)
+            if not entry["action"]:
+                raise ValueError("audit action is required")
+            data = self._read()
+            history = [entry]
+            for item in data.get("audit_logs", []):
+                if isinstance(item, dict):
+                    history.append(normalize_audit_entry(item))
+            data["audit_logs"] = history[: max(1, limit)]
+            self._write(data)
+            return entry
+
+    def list_audit_logs(self, profile_name: str = "", target: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            return self._list_audit_logs_unlocked(profile_name=profile_name, target=target, limit=limit)
+
+    def quick_create_todo(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            title = str(payload.get("title", "")).strip()
+            if not title:
+                raise ValueError("todo title is required")
+            profile = str(payload.get("profile", "")).strip()
+            target = str(payload.get("target", "")).strip()
+            if not profile:
+                raise ValueError("todo profile is required")
+            if not target:
+                raise ValueError("todo target is required")
+            quick_todo = {
+                "title": title,
+                "detail": str(payload.get("detail", "")).strip(),
+                "profile": profile,
+                "target": target,
+                "alias": str(payload.get("alias", "")).strip(),
+                "priority": str(payload.get("priority", "medium")).strip() or "medium",
+                "assignee": str(payload.get("assignee", "")).strip(),
+                "role": str(payload.get("role", "general")).strip() or "general",
+                "status": "todo",
+            }
+            handoff = payload.get("handoff_packet", {})
+            if isinstance(handoff, dict) and any(str(handoff.get(k, "")).strip() for k in ("context", "constraints", "acceptance", "rollback")):
+                quick_todo["handoff_packet"] = handoff
+            return self._save_todo_unlocked(quick_todo)
+
+    def create_workflow_triplet(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            title = str(payload.get("title", "")).strip()
+            profile = str(payload.get("profile", "")).strip()
+            if not title:
+                raise ValueError("workflow title is required")
+            if not profile:
+                raise ValueError("workflow profile is required")
+            workflow_id = str(payload.get("workflow_id", "")).strip() or uuid4().hex
+            default_target = str(payload.get("target", "")).strip()
+            if not default_target:
+                raise ValueError("workflow target is required")
+            handoff_packet = normalize_handoff_packet(payload.get("handoff_packet", {}))
+            planner_target = str(payload.get("planner_target", "")).strip() or default_target
+            executor_target = str(payload.get("executor_target", "")).strip() or default_target
+            reviewer_target = str(payload.get("reviewer_target", "")).strip() or default_target
+            priority = normalize_todo_priority(payload.get("priority", "medium"))
+
+            planner = self._save_todo_unlocked(
                 {
-                    "week": week,
-                    "todo_count": row["count"],
-                    "t_dispatch_avg_sec": round(dispatch_avg, 1) if dispatch_avg is not None else None,
-                    "t_done_avg_sec": round(done_avg, 1) if done_avg is not None else None,
-                    "t_verify_avg_sec": round(verify_avg, 1) if verify_avg is not None else None,
+                    "title": f"[planner] {title}",
+                    "detail": str(payload.get("detail", "")).strip(),
+                    "profile": profile,
+                    "target": planner_target,
+                    "alias": str(payload.get("planner_alias", "")).strip(),
+                    "role": "planner",
+                    "priority": priority,
+                    "status": "todo",
+                    "workflow_id": workflow_id,
+                    "handoff_packet": handoff_packet,
                 }
             )
+            executor = self._save_todo_unlocked(
+                {
+                    "title": f"[executor] {title}",
+                    "detail": str(payload.get("detail", "")).strip(),
+                    "profile": profile,
+                    "target": executor_target,
+                    "alias": str(payload.get("executor_alias", "")).strip(),
+                    "role": "executor",
+                    "priority": priority,
+                    "status": "todo",
+                    "workflow_id": workflow_id,
+                    "parent_todo_id": planner["id"],
+                    "blocked_by": [planner["id"]],
+                    "handoff_packet": handoff_packet,
+                }
+            )
+            reviewer = self._save_todo_unlocked(
+                {
+                    "title": f"[reviewer] {title}",
+                    "detail": str(payload.get("detail", "")).strip(),
+                    "profile": profile,
+                    "target": reviewer_target,
+                    "alias": str(payload.get("reviewer_alias", "")).strip(),
+                    "role": "reviewer",
+                    "priority": priority,
+                    "status": "todo",
+                    "workflow_id": workflow_id,
+                    "parent_todo_id": executor["id"],
+                    "blocked_by": [executor["id"]],
+                    "handoff_packet": handoff_packet,
+                }
+            )
+            return {"workflow_id": workflow_id, "todos": [planner, executor, reviewer]}
+
+    def list_workflow_todos(self, workflow_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            cleaned = str(workflow_id).strip()
+            if not cleaned:
+                raise ValueError("workflow_id is required")
+            role_order = {"planner": 0, "executor": 1, "reviewer": 2, "general": 3}
+            todos = [todo for todo in self._list_todos_unlocked() if str(todo.get("workflow_id", "")).strip() == cleaned]
+            return sorted(
+                todos,
+                key=lambda item: (role_order.get(str(item.get("role", "general")), 9), str(item.get("created_at", ""))),
+            )
+
+    def _share_is_active(self, share: dict[str, Any]) -> bool:
+        if str(share.get("revoked_at", "")).strip():
+            return False
+        expires_at = parse_utc(share.get("expires_at"))
+        if expires_at is None:
+            return True
+        return expires_at > datetime.now(timezone.utc)
+
+    def list_session_shares(self, profile_name: str = "", target: str = "", include_expired: bool = False) -> list[dict[str, Any]]:
+        with self._lock:
+            return self._list_session_shares_unlocked(profile_name=profile_name, target=target, include_expired=include_expired)
+
+    def create_session_share(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            share = normalize_share_link(payload)
+            if not share["profile"]:
+                raise ValueError("share profile is required")
+            if not share["target"]:
+                raise ValueError("share target is required")
+            if not share["expires_at"]:
+                expires_in_minutes = optional_non_negative_int(payload.get("expires_in_minutes", 60), "expires_in_minutes")
+                if expires_in_minutes <= 0:
+                    expires_in_minutes = 60
+                share["expires_at"] = (
+                    datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes)
+                ).isoformat(timespec="seconds").replace("+00:00", "Z")
+            now = utc_now()
+            share["updated_at"] = now
+            data = self._read()
+            existing = None
+            for item in data.get("session_shares", []):
+                if isinstance(item, dict) and str(item.get("id", "")).strip() == share["id"]:
+                    existing = normalize_share_link(item)
+                    break
+            share["created_at"] = existing.get("created_at", now) if existing else now
+            shares = [
+                item
+                for item in data.get("session_shares", [])
+                if not isinstance(item, dict) or str(item.get("id", "")).strip() != share["id"]
+            ]
+            shares.append(share)
+            data["session_shares"] = shares
+            self._write(data)
+            return share
+
+    def revoke_session_share(self, share_id: str = "", token: str = "") -> dict[str, Any]:
+        with self._lock:
+            cleaned_id = str(share_id).strip()
+            cleaned_token = str(token).strip()
+            if not cleaned_id and not cleaned_token:
+                raise ValueError("share id or token is required")
+            data = self._read()
+            shares = data.get("session_shares", [])
+            updated: dict[str, Any] | None = None
+            next_shares: list[dict[str, Any]] = []
+            for item in shares:
+                if not isinstance(item, dict):
+                    continue
+                share = normalize_share_link(item)
+                if (cleaned_id and share["id"] == cleaned_id) or (cleaned_token and share["token"] == cleaned_token):
+                    share["revoked_at"] = utc_now()
+                    share["updated_at"] = share["revoked_at"]
+                    updated = share
+                next_shares.append(share)
+            if not updated:
+                raise RuntimeError("share link not found")
+            data["session_shares"] = next_shares
+            self._write(data)
+            return updated
+
+    def resolve_session_share(self, token: str) -> dict[str, Any]:
+        with self._lock:
+            cleaned = str(token).strip()
+            if not cleaned:
+                raise ValueError("share token is required")
+            for share in self._list_session_shares_unlocked(include_expired=True):
+                if share["token"] != cleaned:
+                    continue
+                if not self._share_is_active(share):
+                    raise RuntimeError("share link expired or revoked")
+                return share
+            raise RuntimeError("share link not found")
+
+    def list_workspace_templates(self, profile_name: str = "", target: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            templates = self._read().get("workspace_templates", [])
+            result: list[dict[str, Any]] = []
+            for item in templates:
+                if not isinstance(item, dict):
+                    continue
+                template = normalize_workspace_template(item)
+                if profile_name and template["profile"] not in {"", profile_name}:
+                    continue
+                if target and template["target"] not in {"", target}:
+                    continue
+                result.append(template)
+            return sorted(result, key=lambda item: (item["profile"] != "", item["target"] != "", item["name"].lower()))
+
+    def save_workspace_template(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            template = normalize_workspace_template(payload)
+            if not template["name"]:
+                raise ValueError("workspace template name is required")
+            data = self._read()
+            now = utc_now()
+            existing = None
+            for item in data.get("workspace_templates", []):
+                if isinstance(item, dict) and str(item.get("id", "")).strip() == template["id"]:
+                    existing = normalize_workspace_template(item)
+                    break
+            template["created_at"] = existing.get("created_at", now) if existing else now
+            template["updated_at"] = now
+            templates = [
+                item
+                for item in data.get("workspace_templates", [])
+                if not isinstance(item, dict) or str(item.get("id", "")).strip() != template["id"]
+            ]
+            templates.append(template)
+            data["workspace_templates"] = templates
+            self._write(data)
+            return template
+
+    def delete_workspace_template(self, template_id: str) -> None:
+        with self._lock:
+            cleaned = str(template_id).strip()
+            if not cleaned:
+                raise ValueError("workspace template id is required")
+            data = self._read()
+            templates = [
+                item
+                for item in data.get("workspace_templates", [])
+                if not isinstance(item, dict) or str(item.get("id", "")).strip() != cleaned
+            ]
+            if len(templates) == len(data.get("workspace_templates", [])):
+                raise RuntimeError(f"workspace template not found: {cleaned}")
+            data["workspace_templates"] = templates
+            self._write(data)
+
+    def list_supervisor_configs(self, profile_name: str = "") -> list[dict[str, Any]]:
+        with self._lock:
+            return self._list_supervisor_configs_unlocked(profile_name=profile_name)
+
+    def get_supervisor_config(self, config_id: str = "", profile_name: str = "") -> dict[str, Any]:
+        with self._lock:
+            cleaned_id = str(config_id).strip()
+            configs = self._list_supervisor_configs_unlocked(profile_name=profile_name)
+            if cleaned_id:
+                for config in configs:
+                    if config["id"] == cleaned_id:
+                        return config
+                raise RuntimeError(f"supervisor config not found: {cleaned_id}")
+            if configs:
+                return configs[0]
+            raise RuntimeError("supervisor config not found")
+
+    def save_supervisor_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            config = normalize_supervisor_config(payload)
+            if not config["name"]:
+                raise ValueError("supervisor config name is required")
+            data = self._read()
+            now = utc_now()
+            existing = None
+            for item in data.get("supervisor_configs", []):
+                if isinstance(item, dict) and str(item.get("id", "")).strip() == config["id"]:
+                    existing = normalize_supervisor_config(item)
+                    break
+            if existing and not config["api_key"] and not config["api_key_ref"]:
+                config["api_key"] = str(existing.get("api_key", ""))
+                config["api_key_ref"] = str(existing.get("api_key_ref", "")).strip()
+            config["created_at"] = existing.get("created_at", now) if existing else now
+            config["updated_at"] = now
+            configs = [
+                item
+                for item in data.get("supervisor_configs", [])
+                if not isinstance(item, dict) or str(item.get("id", "")).strip() != config["id"]
+            ]
+            configs.append(config)
+            data["supervisor_configs"] = configs
+            self._write(data)
+            return config
+
+    def delete_supervisor_config(self, config_id: str) -> None:
+        with self._lock:
+            cleaned = str(config_id).strip()
+            if not cleaned:
+                raise ValueError("supervisor config id is required")
+            data = self._read()
+            configs = [
+                item
+                for item in data.get("supervisor_configs", [])
+                if not isinstance(item, dict) or str(item.get("id", "")).strip() != cleaned
+            ]
+            if len(configs) == len(data.get("supervisor_configs", [])):
+                raise RuntimeError(f"supervisor config not found: {cleaned}")
+            data["supervisor_configs"] = configs
+            self._write(data)
+
+    def list_events(self, profile_name: str = "", target: str = "", limit: int = 200) -> list[dict[str, Any]]:
+        with self._lock:
+            result: list[dict[str, Any]] = []
+            for entry in self._list_audit_logs_unlocked(profile_name=profile_name, target=target, limit=max(1, limit * 2)):
+                result.append(
+                    {
+                        "id": entry["id"],
+                        "source": "audit",
+                        "action": entry["action"],
+                        "profile": entry["profile"],
+                        "target": entry["target"],
+                        "todo_id": entry.get("todo_id", ""),
+                        "status": entry.get("status", ""),
+                        "actor": entry.get("actor", ""),
+                        "note": entry.get("note", ""),
+                        "created_at": entry["created_at"],
+                    }
+                )
+            for todo in self._list_todos_unlocked(profile_name=profile_name, target=target):
+                for event in todo.get("events", []) or []:
+                    if not isinstance(event, dict):
+                        continue
+                    normalized_event = normalize_todo_event(event)
+                    result.append(
+                        {
+                            "id": normalized_event["id"],
+                            "source": "todo",
+                            "action": normalized_event["type"],
+                            "profile": todo["profile"],
+                            "target": todo["target"],
+                            "todo_id": todo["id"],
+                            "status": normalized_event.get("status", ""),
+                            "actor": normalized_event.get("actor", ""),
+                            "note": normalized_event.get("note", ""),
+                            "created_at": normalized_event["created_at"],
+                        }
+                    )
+            sorted_events = sorted(
+                result,
+                key=lambda item: (str(item.get("created_at", "")), str(item.get("id", ""))),
+                reverse=True,
+            )
+            return sorted_events[: max(1, limit)]
+
+    def workflow_metrics(self, profile_name: str = "", target: str = "", window_days: int = 30) -> dict[str, Any]:
+        with self._lock:
+            days = max(1, min(int(window_days), 365))
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            todos = self._list_todos_unlocked(profile_name=profile_name, target=target)
+            dispatch_samples: list[float] = []
+            done_samples: list[float] = []
+            verify_samples: list[float] = []
+            trend: dict[str, dict[str, Any]] = {}
+
+            for todo in todos:
+                created_at = parse_utc(todo.get("created_at"))
+                if not created_at or created_at < cutoff:
+                    continue
+                in_progress_at: datetime | None = None
+                done_at: datetime | None = None
+                verified_at: datetime | None = parse_utc(todo.get("verified_at"))
+                for event in (todo.get("events", []) or []):
+                    if not isinstance(event, dict):
+                        continue
+                    event_status = str(event.get("status", "")).strip().lower()
+                    event_time = parse_utc(event.get("created_at"))
+                    if event_time is None:
+                        continue
+                    if event_status == "in_progress":
+                        in_progress_at = event_time if in_progress_at is None else min(in_progress_at, event_time)
+                    if event_status == "done":
+                        done_at = event_time if done_at is None else min(done_at, event_time)
+                    if event_status == "verified":
+                        verified_at = event_time if verified_at is None else min(verified_at, event_time)
+                if in_progress_at and in_progress_at >= created_at:
+                    dispatch_samples.append((in_progress_at - created_at).total_seconds())
+                if done_at and done_at >= created_at:
+                    done_samples.append((done_at - created_at).total_seconds())
+                if verified_at and done_at and verified_at >= done_at:
+                    verify_samples.append((verified_at - done_at).total_seconds())
+
+                week_key = created_at.strftime("%G-W%V")
+                bucket = trend.setdefault(
+                    week_key,
+                    {"week": week_key, "dispatch_seconds": [], "done_seconds": [], "verify_seconds": [], "count": 0},
+                )
+                bucket["count"] += 1
+                if in_progress_at and in_progress_at >= created_at:
+                    bucket["dispatch_seconds"].append((in_progress_at - created_at).total_seconds())
+                if done_at and done_at >= created_at:
+                    bucket["done_seconds"].append((done_at - created_at).total_seconds())
+                if verified_at and done_at and verified_at >= done_at:
+                    bucket["verify_seconds"].append((verified_at - done_at).total_seconds())
+
+            sends = self._list_audit_logs_unlocked(profile_name=profile_name, target=target, limit=5000)
+            send_events = [entry for entry in sends if entry.get("action") == "agent.send"]
+            misrouted = 0
+            for entry in send_events:
+                payload = entry.get("payload", {})
+                if isinstance(payload, dict) and bool(payload.get("misroute")):
+                    misrouted += 1
+
+            trend_rows = []
+            for week in sorted(trend.keys()):
+                row = trend[week]
+                dispatch_avg = sum(row["dispatch_seconds"]) / len(row["dispatch_seconds"]) if row["dispatch_seconds"] else None
+                done_avg = sum(row["done_seconds"]) / len(row["done_seconds"]) if row["done_seconds"] else None
+                verify_avg = sum(row["verify_seconds"]) / len(row["verify_seconds"]) if row["verify_seconds"] else None
+                trend_rows.append(
+                    {
+                        "week": week,
+                        "todo_count": row["count"],
+                        "t_dispatch_avg_sec": round(dispatch_avg, 1) if dispatch_avg is not None else None,
+                        "t_done_avg_sec": round(done_avg, 1) if done_avg is not None else None,
+                        "t_verify_avg_sec": round(verify_avg, 1) if verify_avg is not None else None,
+                    }
+                )
 
         dispatch_avg = sum(dispatch_samples) / len(dispatch_samples) if dispatch_samples else None
         done_avg = sum(done_samples) / len(done_samples) if done_samples else None

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import re
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +21,8 @@ from .remote import HOST_KEY_POLICIES, PARAMIKO_AVAILABLE, RemoteTmuxClient, SSH
 from .store import ProfileStore, mask_profile, mask_supervisor_config, normalize_profile
 from .supervisor import SupervisorClient
 from .utils import extract_json_object
+
+logger = logging.getLogger("clawdone")
 
 ROLE_LEVELS = {"viewer": 1, "operator": 2, "admin": 3}
 RISK_POLICIES = {"allow", "confirm", "deny"}
@@ -183,7 +187,7 @@ class ClawDoneApp:
         self.todo_autopilot_lines = max(40, int(self.config.get("todo_autopilot_lines", 200)))
         self._todo_autopilot_stop = threading.Event()
         self._todo_autopilot_thread: threading.Thread | None = None
-        self._processed_report_keys: set[str] = set()
+        self._processed_report_keys: OrderedDict[str, None] = OrderedDict()
         self._todo_dispatch_lock = threading.Lock()
         if self.config["default_role"] not in ROLE_LEVELS:
             self.config["default_role"] = "admin"
@@ -395,6 +399,7 @@ class ClawDoneApp:
         try:
             self.store.record_audit(payload)
         except Exception:
+            logger.debug("audit recording failed", exc_info=True)
             return
 
     def supervisor_config_payload(self, profile_name: str = "", config_id: str = "") -> dict[str, Any]:
@@ -632,7 +637,7 @@ class ClawDoneApp:
             try:
                 self.run_todo_autopilot_cycle()
             except Exception:
-                pass
+                logger.exception("autopilot cycle failed")
             self._todo_autopilot_stop.wait(self.todo_autopilot_interval_sec)
 
     def run_todo_autopilot_cycle(self) -> None:
@@ -872,7 +877,9 @@ class ClawDoneApp:
                         "actor": "autopilot",
                     }
                 )
-                self._processed_report_keys.add(key)
+                self._processed_report_keys[key] = None
+                if len(self._processed_report_keys) > 10000:
+                    self._processed_report_keys.popitem(last=False)
                 continue
             status = str(payload.get("status", "")).strip().lower()
             progress_note = str(payload.get("progress_note", ""))
@@ -882,7 +889,9 @@ class ClawDoneApp:
                 evidence = {"type": "summary", "content": summary}
             updated = self.apply_todo_report(todo_id=todo_id, status=status, progress_note=progress_note, evidence=evidence, actor="agent")
             applied.append(updated)
-            self._processed_report_keys.add(key)
+            self._processed_report_keys[key] = None
+            if len(self._processed_report_keys) > 10000:
+                self._processed_report_keys.popitem(last=False)
         return applied
 
     def process_active_todo_reports(self) -> list[dict[str, Any]]:
@@ -1456,7 +1465,7 @@ class ClawDoneApp:
             keep_recent = body.get("keep_recent", 5)
             min_age_days = body.get("min_age_days", 0)
             if not profile_name:
-                self.error_response(handler, HTTPStatus.BAD_REQUEST, "todo profile is required")
+                self.json_response(handler, HTTPStatus.BAD_REQUEST, {"error": "todo profile is required"})
                 return
             if not self.require_share_scope(handler, profile_name, target):
                 return
