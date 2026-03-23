@@ -280,6 +280,57 @@ def normalize_workspace_template(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_supervisor_permissions(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, list):
+        items = value
+    else:
+        items = []
+    allowed = {"dispatch", "review", "accept"}
+    permissions: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        permission = str(item).strip().lower()
+        if not permission or permission in seen:
+            continue
+        if permission not in allowed:
+            raise ValueError(f"supervisor permission must be one of: {', '.join(sorted(allowed))}")
+        permissions.append(permission)
+        seen.add(permission)
+    return permissions or ["dispatch", "review", "accept"]
+
+
+def normalize_supervisor_config(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(payload.get("id", "")).strip() or uuid4().hex,
+        "name": str(payload.get("name", "Supervisor")).strip() or "Supervisor",
+        "profile": str(payload.get("profile", "")).strip(),
+        "provider": str(payload.get("provider", "openai_compatible")).strip().lower() or "openai_compatible",
+        "base_url": str(payload.get("base_url", "https://api.openai.com/v1")).strip() or "https://api.openai.com/v1",
+        "model": str(payload.get("model", "gpt-4.1-mini")).strip() or "gpt-4.1-mini",
+        "api_key": str(payload.get("api_key", "")),
+        "api_key_ref": str(payload.get("api_key_ref", "")).strip(),
+        "enabled": bool(payload.get("enabled", True)),
+        "permissions": normalize_supervisor_permissions(payload.get("permissions", ["dispatch", "review", "accept"])),
+        "auto_dispatch": bool(payload.get("auto_dispatch", True)),
+        "auto_review": bool(payload.get("auto_review", True)),
+        "auto_accept": bool(payload.get("auto_accept", True)),
+        "system_prompt": str(payload.get("system_prompt", "")).strip(),
+        "created_at": str(payload.get("created_at", "")).strip(),
+        "updated_at": str(payload.get("updated_at", "")).strip(),
+    }
+
+
+def mask_supervisor_config(config: dict[str, Any]) -> dict[str, Any]:
+    normalized = normalize_supervisor_config(config)
+    return {
+        **normalized,
+        "api_key": "",
+        "has_api_key": bool(normalized.get("api_key")) or bool(normalized.get("api_key_ref")),
+    }
+
+
 def normalize_audit_entry(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": str(payload.get("id", "")).strip() or uuid4().hex,
@@ -311,6 +362,7 @@ class ProfileStore:
             "audit_logs": [],
             "session_shares": [],
             "workspace_templates": [],
+            "supervisor_configs": [],
         }
 
     def _read(self) -> dict[str, Any]:
@@ -334,6 +386,7 @@ class ProfileStore:
         data.setdefault("audit_logs", [])
         data.setdefault("session_shares", [])
         data.setdefault("workspace_templates", [])
+        data.setdefault("supervisor_configs", [])
         return data
 
     def _write(self, data: dict[str, Any]) -> None:
@@ -450,6 +503,12 @@ class ProfileStore:
             item
             for item in workspace_templates
             if not isinstance(item, dict) or str(item.get("profile", "")).strip() != name
+        ]
+        supervisor_configs = data.get("supervisor_configs", [])
+        data["supervisor_configs"] = [
+            item
+            for item in supervisor_configs
+            if not isinstance(item, dict) or str(item.get("profile", "")).strip() not in {name}
         ]
         self._write(data)
 
@@ -681,6 +740,63 @@ class ProfileStore:
             raise RuntimeError(f"todo not found: {cleaned_id}")
         data["todos"] = todos
         self._write(data)
+
+    def clear_completed_todos(
+        self,
+        profile_name: str = "",
+        target: str = "",
+        keep_recent: int = 5,
+        min_age_days: int = 0,
+    ) -> list[dict[str, Any]]:
+        profile_value = str(profile_name).strip()
+        target_value = str(target).strip()
+        keep_recent_value = max(int(keep_recent), 0)
+        min_age_days_value = max(int(min_age_days), 0)
+        data = self._read()
+        scoped_completed: list[dict[str, Any]] = []
+        for item in data.get("todos", []):
+            if not isinstance(item, dict):
+                continue
+            todo = normalize_todo(item)
+            matches_scope = (not profile_value or todo["profile"] == profile_value) and (not target_value or todo["target"] == target_value)
+            if matches_scope and todo["status"] in {"done", "verified"}:
+                completed_at = parse_utc(todo.get("verified_at")) or parse_utc(todo.get("updated_at")) or parse_utc(todo.get("created_at"))
+                scoped_completed.append({**todo, "_completed_at": completed_at})
+
+        protected_ids = {
+            item["id"]
+            for item in sorted(
+                scoped_completed,
+                key=lambda todo: (todo.get("_completed_at") or datetime.min.replace(tzinfo=timezone.utc), str(todo.get("updated_at", ""))),
+                reverse=True,
+            )[:keep_recent_value]
+        }
+        cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days_value)
+
+        removed: list[dict[str, Any]] = []
+        remaining: list[Any] = []
+        for item in data.get("todos", []):
+            if not isinstance(item, dict):
+                remaining.append(item)
+                continue
+            todo = normalize_todo(item)
+            matches_scope = (not profile_value or todo["profile"] == profile_value) and (not target_value or todo["target"] == target_value)
+            if not matches_scope or todo["status"] not in {"done", "verified"}:
+                remaining.append(item)
+                continue
+            if todo["id"] in protected_ids:
+                remaining.append(item)
+                continue
+            completed_at = parse_utc(todo.get("verified_at")) or parse_utc(todo.get("updated_at")) or parse_utc(todo.get("created_at"))
+            if completed_at and completed_at > cutoff:
+                remaining.append(item)
+                continue
+            removed.append(todo)
+
+        data["todos"] = remaining
+        if removed:
+            self._write(data)
+        return removed
 
     def update_todo_status(self, todo_id: str, status: str, progress_note: str = "", actor: str = "") -> dict[str, Any]:
         todo = self.get_todo(todo_id)
@@ -1096,6 +1212,71 @@ class ProfileStore:
         if len(templates) == len(data.get("workspace_templates", [])):
             raise RuntimeError(f"workspace template not found: {cleaned}")
         data["workspace_templates"] = templates
+        self._write(data)
+
+    def list_supervisor_configs(self, profile_name: str = "") -> list[dict[str, Any]]:
+        configs = self._read().get("supervisor_configs", [])
+        result: list[dict[str, Any]] = []
+        for item in configs:
+            if not isinstance(item, dict):
+                continue
+            config = normalize_supervisor_config(item)
+            if profile_name and config["profile"] not in {"", profile_name}:
+                continue
+            result.append(config)
+        return sorted(result, key=lambda item: (item["profile"] != "", item["name"].lower()))
+
+    def get_supervisor_config(self, config_id: str = "", profile_name: str = "") -> dict[str, Any]:
+        cleaned_id = str(config_id).strip()
+        configs = self.list_supervisor_configs(profile_name=profile_name)
+        if cleaned_id:
+            for config in configs:
+                if config["id"] == cleaned_id:
+                    return config
+            raise RuntimeError(f"supervisor config not found: {cleaned_id}")
+        if configs:
+            return configs[0]
+        raise RuntimeError("supervisor config not found")
+
+    def save_supervisor_config(self, payload: dict[str, Any]) -> dict[str, Any]:
+        config = normalize_supervisor_config(payload)
+        if not config["name"]:
+            raise ValueError("supervisor config name is required")
+        data = self._read()
+        now = utc_now()
+        existing = None
+        for item in data.get("supervisor_configs", []):
+            if isinstance(item, dict) and str(item.get("id", "")).strip() == config["id"]:
+                existing = normalize_supervisor_config(item)
+                break
+        if existing and not config["api_key"] and not config["api_key_ref"]:
+            config["api_key"] = str(existing.get("api_key", ""))
+            config["api_key_ref"] = str(existing.get("api_key_ref", "")).strip()
+        config["created_at"] = existing.get("created_at", now) if existing else now
+        config["updated_at"] = now
+        configs = [
+            item
+            for item in data.get("supervisor_configs", [])
+            if not isinstance(item, dict) or str(item.get("id", "")).strip() != config["id"]
+        ]
+        configs.append(config)
+        data["supervisor_configs"] = configs
+        self._write(data)
+        return config
+
+    def delete_supervisor_config(self, config_id: str) -> None:
+        cleaned = str(config_id).strip()
+        if not cleaned:
+            raise ValueError("supervisor config id is required")
+        data = self._read()
+        configs = [
+            item
+            for item in data.get("supervisor_configs", [])
+            if not isinstance(item, dict) or str(item.get("id", "")).strip() != cleaned
+        ]
+        if len(configs) == len(data.get("supervisor_configs", [])):
+            raise RuntimeError(f"supervisor config not found: {cleaned}")
+        data["supervisor_configs"] = configs
         self._write(data)
 
     def list_events(self, profile_name: str = "", target: str = "", limit: int = 200) -> list[dict[str, Any]]:

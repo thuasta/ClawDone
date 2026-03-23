@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from pathlib import Path
 from http import HTTPStatus
@@ -14,7 +15,8 @@ from urllib.parse import parse_qs, urlparse
 from .html import INDEX_HTML
 from .local_tmux import TmuxClient
 from .remote import HOST_KEY_POLICIES, PARAMIKO_AVAILABLE, RemoteTmuxClient, SSHExecutor
-from .store import ProfileStore, mask_profile, normalize_profile
+from .store import ProfileStore, mask_profile, mask_supervisor_config, normalize_profile
+from .supervisor import SupervisorClient
 
 ROLE_LEVELS = {"viewer": 1, "operator": 2, "admin": 3}
 RISK_POLICIES = {"allow", "confirm", "deny"}
@@ -27,6 +29,9 @@ RISK_HIGH_PATTERNS = [
     re.compile(r"\breboot\b", flags=re.IGNORECASE),
     re.compile(r":\(\)\s*\{\s*:\|:\s*&\s*\};:", flags=re.IGNORECASE),
 ]
+AUTO_REPORT_PATTERN = re.compile(r"CLAWDONE_REPORT\s+(\{[^\r\n]*\})")
+FINAL_TODO_STATUSES = {"done", "verified"}
+READY_TODO_STATUSES = {"todo", "in_progress", "done"}
 
 
 def _positive_int(config: dict[str, Any], key: str, default: int) -> int:
@@ -90,6 +95,9 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
         "dashboard_workers": _positive_int(config, "dashboard_workers", 6),
         "host_key_policy": _host_key_policy(config),
         "known_hosts_file": str(config.get("known_hosts_file", "~/.ssh/known_hosts")),
+        "todo_autopilot": bool(config.get("todo_autopilot", True)),
+        "todo_autopilot_interval_sec": _positive_int(config, "todo_autopilot_interval_sec", 3),
+        "todo_autopilot_lines": _positive_int(config, "todo_autopilot_lines", 200),
     }
 
 
@@ -178,6 +186,14 @@ class ClawDoneApp:
             )
             remote_tmux = RemoteTmuxClient(executor=ssh_executor, dashboard_workers=self.config["dashboard_workers"])
         self.remote_tmux = remote_tmux
+        self.supervisor_client = SupervisorClient()
+        self.todo_autopilot_enabled = bool(self.config.get("todo_autopilot", True))
+        self.todo_autopilot_interval_sec = max(1.0, float(self.config.get("todo_autopilot_interval_sec", 3)))
+        self.todo_autopilot_lines = max(40, int(self.config.get("todo_autopilot_lines", 200)))
+        self._todo_autopilot_stop = threading.Event()
+        self._todo_autopilot_thread: threading.Thread | None = None
+        self._processed_report_keys: set[str] = set()
+        self._todo_dispatch_lock = threading.Lock()
         if self.config["default_role"] not in ROLE_LEVELS:
             self.config["default_role"] = "admin"
 
@@ -365,6 +381,546 @@ class ClawDoneApp:
         except Exception:
             return
 
+    def supervisor_config_payload(self, profile_name: str = "", config_id: str = "") -> dict[str, Any]:
+        return mask_supervisor_config(self.store.get_supervisor_config(config_id=config_id, profile_name=profile_name))
+
+    def require_supervisor_permission(self, config: dict[str, Any], permission: str) -> None:
+        permissions = {str(item).strip().lower() for item in (config.get("permissions", []) or [])}
+        if permission not in permissions:
+            raise ValueError(f"supervisor permission denied for: {permission}")
+        if not bool(config.get("enabled", True)):
+            raise ValueError("supervisor config is disabled")
+
+    def list_supervisor_candidates(self, profile_name: str) -> list[dict[str, Any]]:
+        profile = self.get_profile(profile_name)
+        aliases = self.store.aliases_for(profile_name)
+        snapshot = self.remote_tmux.snapshot(profile, aliases=aliases)
+        candidates: list[dict[str, Any]] = []
+        for session in snapshot.get("sessions", []):
+            if not isinstance(session, dict):
+                continue
+            for window in session.get("windows", []):
+                if not isinstance(window, dict):
+                    continue
+                for pane in window.get("panes", []):
+                    if not isinstance(pane, dict):
+                        continue
+                    target = str(pane.get("target", "")).strip()
+                    if not target:
+                        continue
+                    candidates.append(
+                        {
+                            "target": target,
+                            "alias": str(pane.get("alias", "")).strip(),
+                            "session": str(session.get("name", "")).strip(),
+                            "window_name": str(window.get("name", "")).strip(),
+                            "window_index": str(window.get("index", "")).strip(),
+                            "command": str(pane.get("current_command", "")).strip(),
+                            "active": bool(pane.get("active", False)),
+                        }
+                    )
+        return candidates
+
+    def capture_todo_output(self, todo: dict[str, Any], lines: int = 200) -> str:
+        profile_name = str(todo.get("profile", "")).strip()
+        target = str(todo.get("target", "")).strip()
+        if not profile_name or not target:
+            return ""
+        try:
+            return self.capture_pane_with_reports(profile_name=profile_name, target=target, lines=lines)
+        except Exception:
+            return ""
+
+    def active_supervisor_config(self, profile_name: str, permission: str = "", auto_flag: str = "") -> dict[str, Any] | None:
+        try:
+            config = self.store.get_supervisor_config(profile_name=profile_name)
+        except RuntimeError:
+            return None
+        if not bool(config.get("enabled", True)):
+            return None
+        permissions = {str(item).strip().lower() for item in (config.get("permissions", []) or [])}
+        if permission and permission not in permissions:
+            return None
+        if auto_flag and not bool(config.get(auto_flag, False)):
+            return None
+        return config
+
+    def todo_has_recent_audit(self, todo: dict[str, Any], actions: set[str]) -> bool:
+        todo_id = str(todo.get("id", "")).strip()
+        if not todo_id:
+            return False
+        updated_at = str(todo.get("updated_at", "")).strip()
+        logs = self.store.list_audit_logs(
+            profile_name=str(todo.get("profile", "")).strip(),
+            target=str(todo.get("target", "")).strip(),
+            limit=200,
+        )
+        for entry in logs:
+            if str(entry.get("todo_id", "")).strip() != todo_id:
+                continue
+            if str(entry.get("action", "")).strip() not in actions:
+                continue
+            if not updated_at or str(entry.get("created_at", "")).strip() >= updated_at:
+                return True
+        return False
+
+    def supervisor_route_todo(self, todo: dict[str, Any] | str, actor: str = "supervisor", auto_send: bool = True) -> dict[str, Any]:
+        current = self.store.get_todo(todo) if isinstance(todo, str) else self.store.get_todo(str(todo.get("id", "")))
+        profile_name = str(current.get("profile", "")).strip()
+        config = self.active_supervisor_config(profile_name, permission="dispatch", auto_flag="auto_dispatch")
+        if config is None:
+            return {"used_supervisor": False, "todo": current, "dispatch": self.auto_dispatch_todo(current, actor=actor if actor else "autopilot")}
+        try:
+            candidates = self.list_supervisor_candidates(profile_name)
+            if not candidates:
+                raise RuntimeError("no candidate agents available for supervisor routing")
+            decision = self.supervisor_client.dispatch(config=config, todo=current, candidates=candidates)
+            updated = current
+            if decision.get("target") or decision.get("alias"):
+                updated = self.store.save_todo(
+                    {
+                        **current,
+                        "id": current["id"],
+                        "target": str(decision.get("target", current.get("target", ""))).strip() or current.get("target", ""),
+                        "alias": str(decision.get("alias", current.get("alias", ""))).strip(),
+                    }
+                )
+            self.record_audit_safe(
+                {
+                    "action": "supervisor.auto_dispatch",
+                    "profile": updated.get("profile", ""),
+                    "target": updated.get("target", ""),
+                    "alias": updated.get("alias", ""),
+                    "todo_id": updated.get("id", ""),
+                    "status": updated.get("status", ""),
+                    "note": str(decision.get("reason", "")).strip(),
+                    "actor": actor,
+                    "payload": {"confidence": decision.get("confidence", 0)},
+                }
+            )
+            dispatch = {"dispatched": False, "todo": updated}
+            if auto_send and str(updated.get("status", "")).strip().lower() == "todo":
+                dispatch = self.auto_dispatch_todo(updated, actor=actor)
+                updated = dispatch.get("todo", updated)
+            return {"used_supervisor": True, "decision": decision, "todo": updated, "dispatch": dispatch}
+        except Exception as exc:
+            self.record_audit_safe(
+                {
+                    "action": "supervisor.auto_dispatch_error",
+                    "profile": current.get("profile", ""),
+                    "target": current.get("target", ""),
+                    "alias": current.get("alias", ""),
+                    "todo_id": current.get("id", ""),
+                    "status": current.get("status", ""),
+                    "note": str(exc)[:200],
+                    "actor": actor,
+                }
+            )
+            return {"used_supervisor": True, "todo": current, "error": str(exc), "dispatch": {"dispatched": False, "todo": current}}
+
+    def maybe_run_supervisor_review(self, todo: dict[str, Any] | str, actor: str = "supervisor") -> dict[str, Any] | None:
+        current = self.store.get_todo(todo) if isinstance(todo, str) else self.store.get_todo(str(todo.get("id", "")))
+        if str(current.get("status", "")).strip().lower() not in FINAL_TODO_STATUSES:
+            return None
+        profile_name = str(current.get("profile", "")).strip()
+        config = self.active_supervisor_config(profile_name, permission="review", auto_flag="auto_review")
+        if config is None:
+            return None
+        if self.todo_has_recent_audit(current, {"supervisor.auto_review", "supervisor.auto_accept"}):
+            return None
+        try:
+            pane_output = self.capture_todo_output(current)
+            review = self.supervisor_client.review(config=config, todo=current, pane_output=pane_output)
+            self.record_audit_safe(
+                {
+                    "action": "supervisor.auto_review",
+                    "profile": current.get("profile", ""),
+                    "target": current.get("target", ""),
+                    "alias": current.get("alias", ""),
+                    "todo_id": current.get("id", ""),
+                    "status": current.get("status", ""),
+                    "note": review.get("summary", ""),
+                    "actor": actor,
+                    "payload": {"verdict": review.get("verdict", "needs_work")},
+                }
+            )
+            verdict = str(review.get("verdict", "needs_work")).strip().lower()
+            if verdict == "accept" and bool(config.get("auto_accept", True)) and self.active_supervisor_config(profile_name, permission="accept"):
+                evidence = review.get("evidence", [])
+                updated = current
+                current_status = str(updated.get("status", "")).strip().lower()
+                if current_status not in {"done", "verified"}:
+                    updated = self.apply_todo_report(todo_id=updated["id"], status="done", progress_note=review.get("summary", ""), evidence=evidence, actor=actor)
+                    evidence = []
+                if str(updated.get("status", "")).strip().lower() != "verified":
+                    updated = self.apply_todo_report(todo_id=updated["id"], status="verified", progress_note=review.get("summary", ""), evidence=evidence, actor=actor)
+                self.record_audit_safe(
+                    {
+                        "action": "supervisor.auto_accept",
+                        "profile": updated.get("profile", ""),
+                        "target": updated.get("target", ""),
+                        "alias": updated.get("alias", ""),
+                        "todo_id": updated.get("id", ""),
+                        "status": updated.get("status", ""),
+                        "note": review.get("summary", ""),
+                        "actor": actor,
+                    }
+                )
+                return {"review": review, "todo": updated, "accepted": True}
+            return {"review": review, "todo": current, "accepted": False}
+        except Exception as exc:
+            self.record_audit_safe(
+                {
+                    "action": "supervisor.auto_review_error",
+                    "profile": current.get("profile", ""),
+                    "target": current.get("target", ""),
+                    "alias": current.get("alias", ""),
+                    "todo_id": current.get("id", ""),
+                    "status": current.get("status", ""),
+                    "note": str(exc)[:200],
+                    "actor": actor,
+                }
+            )
+            return None
+
+    def process_supervisor_review_queue(self) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        for todo in self.store.list_todos():
+            if str(todo.get("status", "")).strip().lower() not in FINAL_TODO_STATUSES:
+                continue
+            result = self.maybe_run_supervisor_review(todo, actor="supervisor")
+            if result is not None:
+                results.append(result)
+        return results
+
+    def start_background_tasks(self) -> None:
+        if not self.todo_autopilot_enabled:
+            return
+        if self._todo_autopilot_thread and self._todo_autopilot_thread.is_alive():
+            return
+        self._todo_autopilot_stop.clear()
+        self._todo_autopilot_thread = threading.Thread(
+            target=self._todo_autopilot_loop,
+            name="clawdone-todo-autopilot",
+            daemon=True,
+        )
+        self._todo_autopilot_thread.start()
+
+    def stop_background_tasks(self) -> None:
+        self._todo_autopilot_stop.set()
+        if self._todo_autopilot_thread and self._todo_autopilot_thread.is_alive():
+            self._todo_autopilot_thread.join(timeout=1.0)
+
+    def _todo_autopilot_loop(self) -> None:
+        while not self._todo_autopilot_stop.is_set():
+            try:
+                self.run_todo_autopilot_cycle()
+            except Exception:
+                pass
+            self._todo_autopilot_stop.wait(self.todo_autopilot_interval_sec)
+
+    def run_todo_autopilot_cycle(self) -> None:
+        if not self.todo_autopilot_enabled:
+            return
+        self.auto_dispatch_ready_todos()
+        self.process_active_todo_reports()
+        self.process_supervisor_review_queue()
+
+    def _todo_is_unblocked(self, todo: dict[str, Any], todos_by_id: dict[str, dict[str, Any]] | None = None) -> bool:
+        blockers = [str(item).strip() for item in (todo.get("blocked_by", []) or []) if str(item).strip()]
+        if not blockers:
+            return True
+        if todos_by_id is None:
+            todos_by_id = {item["id"]: item for item in self.store.list_todos(profile_name=str(todo.get("profile", "")).strip())}
+        for blocker_id in blockers:
+            blocker = todos_by_id.get(blocker_id)
+            if not blocker:
+                return False
+            if str(blocker.get("status", "")).strip().lower() not in FINAL_TODO_STATUSES:
+                return False
+        return True
+
+    def compose_todo_dispatch_command(self, todo: dict[str, Any]) -> str:
+        handoff = todo.get("handoff_packet", {}) or {}
+        role = str(todo.get("role", "general")).strip() or "general"
+        title = " ".join(str(todo.get("title", "")).split())
+        detail = " ".join(str(todo.get("detail", "")).split())
+        example_payload = {
+            "todo_id": todo["id"],
+            "status": "done",
+            "progress_note": "short delivery summary",
+            "evidence": [{"type": "summary", "content": "what shipped and how it was verified"}],
+        }
+        parts = [
+            f"ClawDone task {todo['id']}.",
+            f"Role: {role}.",
+            f"Title: {title}.",
+        ]
+        if detail:
+            parts.append(f"Detail: {detail}.")
+        for label, key in (("Context", "context"), ("Constraints", "constraints"), ("Acceptance", "acceptance"), ("Rollback", "rollback")):
+            value = " ".join(str(handoff.get(key, "")).split())
+            if value:
+                parts.append(f"{label}: {value}.")
+        parts.append("When you start or finish, print exactly one single-line report prefixed with CLAWDONE_REPORT and valid JSON only.")
+        parts.append(
+            f"Final example: CLAWDONE_REPORT {json.dumps(example_payload, ensure_ascii=False, separators=(',', ':'))}"
+        )
+        parts.append("Use status in_progress when started; use blocked if you are blocked; never wrap the JSON in backticks.")
+        return " ".join(part for part in parts if part).strip()
+
+    def auto_dispatch_todo(self, todo: dict[str, Any] | str, actor: str = "autopilot") -> dict[str, Any]:
+        with self._todo_dispatch_lock:
+            current = self.store.get_todo(todo) if isinstance(todo, str) else self.store.get_todo(str(todo.get("id", "")))
+            alias = current.get("alias", "") or self.store.aliases_for(current["profile"]).get(current["target"], "")
+            if str(current.get("status", "")).strip().lower() != "todo":
+                return {"dispatched": False, "todo": current, "target": current["target"], "alias": alias, "reason": "status"}
+            todos_by_id = {item["id"]: item for item in self.store.list_todos(profile_name=current["profile"])}
+            if not self._todo_is_unblocked(current, todos_by_id=todos_by_id):
+                return {"dispatched": False, "todo": current, "target": current["target"], "alias": alias, "reason": "blocked"}
+            command = self.compose_todo_dispatch_command(current)
+            try:
+                profile = self.get_profile(current["profile"])
+                self.remote_tmux.send_keys(profile, target=current["target"], command=command, press_enter=True)
+                self.store.record_history({"profile": current["profile"], "target": current["target"], "alias": alias, "command": command})
+                updated = self.store.update_todo_status(
+                    todo_id=current["id"],
+                    status="in_progress",
+                    progress_note="Auto-dispatched to agent.",
+                    actor=actor,
+                )
+                self.record_audit_safe(
+                    {
+                        "action": "todo.auto_dispatch",
+                        "profile": updated["profile"],
+                        "target": updated["target"],
+                        "alias": alias,
+                        "todo_id": updated["id"],
+                        "status": updated["status"],
+                        "note": updated.get("title", ""),
+                        "actor": actor,
+                        "payload": {"role": updated.get("role", "general")},
+                    }
+                )
+                return {"dispatched": True, "todo": updated, "target": updated["target"], "alias": alias, "command": command}
+            except Exception as exc:
+                self.record_audit_safe(
+                    {
+                        "action": "todo.auto_dispatch_error",
+                        "profile": current["profile"],
+                        "target": current["target"],
+                        "alias": alias,
+                        "todo_id": current["id"],
+                        "status": current.get("status", "todo"),
+                        "note": str(exc)[:200],
+                        "actor": actor,
+                    }
+                )
+                return {"dispatched": False, "todo": current, "target": current["target"], "alias": alias, "error": str(exc)}
+
+    def auto_dispatch_ready_todos(self, profile_name: str = "") -> list[dict[str, Any]]:
+        dispatched: list[dict[str, Any]] = []
+        todos = self.store.list_todos(profile_name=profile_name)
+        todos_by_id = {item["id"]: item for item in todos}
+        ordered = sorted(todos, key=lambda item: (str(item.get("created_at", "")), str(item.get("id", ""))))
+        for todo in ordered:
+            if str(todo.get("status", "")).strip().lower() != "todo":
+                continue
+            if not self._todo_is_unblocked(todo, todos_by_id=todos_by_id):
+                continue
+            route_result = self.supervisor_route_todo(todo, actor="supervisor", auto_send=True)
+            result = route_result.get("dispatch", {"dispatched": False, "todo": route_result.get("todo", todo)})
+            if result.get("dispatched"):
+                dispatched.append({**result, "supervisor": route_result.get("decision")})
+                todos_by_id[todo["id"]] = result["todo"]
+        return dispatched
+
+    def _extract_balanced_report_json(self, text: str, start_index: int) -> tuple[str, int] | None:
+        start = text.find("{", start_index)
+        if start < 0:
+            return None
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(text)):
+            char = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == "\\":
+                    escape = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+                continue
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:index + 1], index + 1
+        return None
+
+    def extract_todo_reports(self, output: str) -> list[dict[str, Any]]:
+        text = str(output or "")
+        reports: list[dict[str, Any]] = []
+        marker = "CLAWDONE_REPORT"
+        cursor = 0
+        while True:
+            marker_index = text.find(marker, cursor)
+            if marker_index < 0:
+                break
+            parsed = self._extract_balanced_report_json(text, marker_index + len(marker))
+            if parsed is None:
+                cursor = marker_index + len(marker)
+                continue
+            raw, next_index = parsed
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                cursor = marker_index + len(marker)
+                continue
+            if isinstance(payload, dict):
+                canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                reports.append({"raw": raw, "payload": payload, "key": canonical})
+            cursor = next_index
+        return reports
+
+    def apply_todo_report(
+        self,
+        todo_id: str,
+        status: str = "",
+        progress_note: str = "",
+        evidence: Any = None,
+        actor: str = "agent",
+    ) -> dict[str, Any]:
+        updated = self.store.get_todo(todo_id)
+        status_value = str(status or "").strip().lower()
+        note = str(progress_note or "")
+        report_evidence = evidence
+        if status_value in FINAL_TODO_STATUSES and report_evidence in (None, "", []) and note.strip():
+            report_evidence = {"type": "summary", "content": note.strip()}
+
+        if status_value in FINAL_TODO_STATUSES and report_evidence not in (None, "", []):
+            if isinstance(report_evidence, list):
+                for item in report_evidence:
+                    updated = self.store.append_todo_evidence(updated["id"], item, actor=actor)
+            else:
+                updated = self.store.append_todo_evidence(updated["id"], report_evidence, actor=actor)
+            report_evidence = None
+
+        if status_value:
+            updated = self.store.update_todo_status(
+                todo_id=todo_id,
+                status=status_value,
+                progress_note=note,
+                actor=actor,
+            )
+        elif note.strip():
+            event = {
+                "type": "status",
+                "status": updated.get("status", ""),
+                "note": note.strip(),
+                "actor": actor,
+                "created_at": "",
+            }
+            updated["events"] = [event, *(updated.get("events", []) or [])]
+            updated["progress_note"] = note.strip()
+            updated = self.store.save_todo(updated)
+
+        if report_evidence not in (None, "", []):
+            if isinstance(report_evidence, list):
+                for item in report_evidence:
+                    updated = self.store.append_todo_evidence(updated["id"], item, actor=actor)
+            else:
+                updated = self.store.append_todo_evidence(updated["id"], report_evidence, actor=actor)
+
+        self.record_audit_safe(
+            {
+                "action": "todo.report",
+                "profile": updated["profile"],
+                "target": updated["target"],
+                "alias": updated.get("alias", ""),
+                "todo_id": updated["id"],
+                "status": updated["status"],
+                "note": note.strip(),
+                "actor": actor,
+            }
+        )
+        if status_value in FINAL_TODO_STATUSES:
+            self.auto_dispatch_ready_todos(profile_name=updated["profile"])
+            if str(actor).strip().lower() != "supervisor":
+                self.maybe_run_supervisor_review(updated, actor="supervisor")
+                updated = self.store.get_todo(updated["id"])
+        return updated
+
+    def process_pane_reports(self, profile_name: str, target: str, output: str) -> list[dict[str, Any]]:
+        applied: list[dict[str, Any]] = []
+        for report in self.extract_todo_reports(output):
+            key = f"{profile_name}:{target}:{report.get('key', report['raw'])}"
+            if key in self._processed_report_keys:
+                continue
+            payload = report["payload"]
+            todo_id = str(payload.get("todo_id", "")).strip()
+            if not todo_id:
+                continue
+            try:
+                current = self.store.get_todo(todo_id)
+            except RuntimeError:
+                continue
+            if current.get("profile") != profile_name or current.get("target") != target:
+                self.record_audit_safe(
+                    {
+                        "action": "todo.report_ignored",
+                        "profile": profile_name,
+                        "target": target,
+                        "todo_id": todo_id,
+                        "note": "report target mismatch",
+                        "actor": "autopilot",
+                    }
+                )
+                self._processed_report_keys.add(key)
+                continue
+            status = str(payload.get("status", "")).strip().lower()
+            progress_note = str(payload.get("progress_note", ""))
+            evidence = payload.get("evidence")
+            if status in FINAL_TODO_STATUSES and evidence in (None, "", []):
+                summary = progress_note.strip() or str(payload.get("delivery", "")).strip() or report["raw"]
+                evidence = {"type": "summary", "content": summary}
+            updated = self.apply_todo_report(todo_id=todo_id, status=status, progress_note=progress_note, evidence=evidence, actor="agent")
+            applied.append(updated)
+            self._processed_report_keys.add(key)
+        return applied
+
+    def process_active_todo_reports(self) -> list[dict[str, Any]]:
+        active_targets: set[tuple[str, str]] = set()
+        for todo in self.store.list_todos():
+            status = str(todo.get("status", "")).strip().lower()
+            if status not in {"in_progress", "done"}:
+                continue
+            profile_name = str(todo.get("profile", "")).strip()
+            target = str(todo.get("target", "")).strip()
+            if profile_name and target:
+                active_targets.add((profile_name, target))
+        applied: list[dict[str, Any]] = []
+        for profile_name, target in sorted(active_targets):
+            try:
+                profile = self.get_profile(profile_name)
+                output = self.remote_tmux.capture_pane(profile, target=target, lines=self.todo_autopilot_lines)
+            except Exception:
+                continue
+            applied.extend(self.process_pane_reports(profile_name, target, output))
+        return applied
+
+    def capture_pane_with_reports(self, profile_name: str, target: str, lines: int) -> str:
+        profile = self.get_profile(profile_name)
+        output = self.remote_tmux.capture_pane(profile, target=target, lines=lines)
+        if self.todo_autopilot_enabled:
+            self.process_pane_reports(profile_name, target, output)
+        return output
+
     def stream_todos(self, handler: BaseHTTPRequestHandler, profile_name: str, target: str, interval_sec: float) -> None:
         if not profile_name:
             raise ValueError("profile is required")
@@ -420,7 +976,7 @@ class ClawDoneApp:
 
         last_payload = ""
         for _ in range(300):
-            output = self.remote_tmux.capture_pane(profile, target=target, lines=max_lines)
+            output = self.capture_pane_with_reports(profile_name=profile_name, target=target, lines=max_lines)
             payload = json.dumps({"profile": profile_name, "target": target, "output": output}, ensure_ascii=False)
             try:
                 if payload != last_payload:
@@ -542,6 +1098,22 @@ class ClawDoneApp:
                 HTTPStatus.OK,
                 {"summaries": self.store.todo_summary(profile_name=profile_name, target=target)},
             )
+            return
+
+        if parsed.path == "/api/supervisor/configs":
+            profile_name = str(query.get("profile", [""])[0]).strip()
+            if profile_name and not self.require_share_scope(handler, profile_name, ""):
+                return
+            configs = [mask_supervisor_config(item) for item in self.store.list_supervisor_configs(profile_name=profile_name)]
+            self.json_response(handler, HTTPStatus.OK, {"configs": configs})
+            return
+
+        if parsed.path == "/api/supervisor/config":
+            profile_name = str(query.get("profile", [""])[0]).strip()
+            config_id = str(query.get("id", [""])[0]).strip()
+            if profile_name and not self.require_share_scope(handler, profile_name, ""):
+                return
+            self.json_response(handler, HTTPStatus.OK, {"config": self.supervisor_config_payload(profile_name=profile_name, config_id=config_id)})
             return
 
         if parsed.path == "/api/workflow/metrics":
@@ -703,7 +1275,7 @@ class ClawDoneApp:
             except ValueError as exc:
                 raise ValueError("lines must be an integer") from exc
             profile = self.get_profile(profile_name)
-            output = self.remote_tmux.capture_pane(profile, target=target, lines=lines)
+            output = self.capture_pane_with_reports(profile_name=profile_name, target=target, lines=lines)
             self.json_response(handler, HTTPStatus.OK, {"profile": profile_name, "target": target, "output": output})
             return
 
@@ -801,7 +1373,10 @@ class ClawDoneApp:
                     "actor": actor,
                 }
             )
-            self.json_response(handler, HTTPStatus.OK, {"ok": True, "todo": todo})
+            dispatches = self.auto_dispatch_ready_todos(profile_name=todo["profile"]) if self.todo_autopilot_enabled else []
+            latest = next((item for item in dispatches if item.get("todo", {}).get("id") == todo["id"]), None)
+            resolved = latest.get("todo", todo) if latest else self.store.get_todo(todo["id"])
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "todo": resolved, "dispatch": latest or {"dispatched": False, "todo": resolved}})
             return
 
         if parsed.path == "/api/workflows/triplet":
@@ -822,7 +1397,9 @@ class ClawDoneApp:
                     "payload": {"workflow_id": workflow["workflow_id"]},
                 }
             )
-            self.json_response(handler, HTTPStatus.OK, {"ok": True, **workflow})
+            dispatches = self.auto_dispatch_ready_todos(profile_name=profile_name) if self.todo_autopilot_enabled else []
+            todos = self.store.list_workflow_todos(workflow["workflow_id"])
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "workflow_id": workflow["workflow_id"], "todos": todos, "dispatches": dispatches})
             return
 
         if parsed.path == "/api/todos":
@@ -845,7 +1422,10 @@ class ClawDoneApp:
                     "actor": actor,
                 }
             )
-            self.json_response(handler, HTTPStatus.OK, {"ok": True, "todo": todo})
+            dispatches = self.auto_dispatch_ready_todos(profile_name=todo["profile"]) if self.todo_autopilot_enabled else []
+            latest = next((item for item in dispatches if item.get("todo", {}).get("id") == todo["id"]), None)
+            resolved = latest.get("todo", todo) if latest else self.store.get_todo(todo["id"])
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "todo": resolved, "dispatch": latest or {"dispatched": False, "todo": resolved}})
             return
 
         if parsed.path == "/api/todos/delete":
@@ -871,6 +1451,50 @@ class ClawDoneApp:
             self.json_response(handler, HTTPStatus.OK, {"ok": True, "id": todo_id})
             return
 
+        if parsed.path == "/api/todos/clear-completed":
+            if not self.require_role(handler, "operator"):
+                return
+            profile_name = str(body.get("profile", "")).strip()
+            target = str(body.get("target", "")).strip()
+            keep_recent = body.get("keep_recent", 5)
+            min_age_days = body.get("min_age_days", 0)
+            if not profile_name:
+                self.error_response(handler, HTTPStatus.BAD_REQUEST, "todo profile is required")
+                return
+            if not self.require_share_scope(handler, profile_name, target):
+                return
+            removed = self.store.clear_completed_todos(
+                profile_name=profile_name,
+                target=target,
+                keep_recent=int(keep_recent or 0),
+                min_age_days=int(min_age_days or 0),
+            )
+            for todo in removed:
+                self.record_audit_safe(
+                    {
+                        "action": "todo.delete.completed",
+                        "profile": todo["profile"],
+                        "target": todo["target"],
+                        "alias": todo.get("alias", ""),
+                        "todo_id": todo["id"],
+                        "status": todo.get("status", ""),
+                        "note": todo.get("title", ""),
+                        "actor": actor,
+                    }
+                )
+            self.json_response(
+                handler,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "removed_count": len(removed),
+                    "removed_ids": [todo["id"] for todo in removed],
+                    "keep_recent": int(keep_recent or 0),
+                    "min_age_days": int(min_age_days or 0),
+                },
+            )
+            return
+
         if parsed.path == "/api/todos/status":
             if not self.require_role(handler, "operator"):
                 return
@@ -894,7 +1518,12 @@ class ClawDoneApp:
                     "actor": request_actor,
                 }
             )
-            self.json_response(handler, HTTPStatus.OK, {"ok": True, "todo": todo})
+            status_now = str(todo.get("status", "")).strip().lower()
+            dispatches = self.auto_dispatch_ready_todos(profile_name=todo["profile"]) if status_now in FINAL_TODO_STATUSES | {"todo"} else []
+            if status_now in FINAL_TODO_STATUSES and request_actor.strip().lower() != "supervisor":
+                self.maybe_run_supervisor_review(todo, actor="supervisor")
+                todo = self.store.get_todo(todo_id)
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "todo": todo, "dispatches": dispatches})
             return
 
         if parsed.path == "/api/todos/evidence":
@@ -942,56 +1571,167 @@ class ClawDoneApp:
             progress_note = str(body.get("progress_note", ""))
             evidence = body.get("evidence")
 
-            updated = self.store.get_todo(todo_id)
-            if not self.require_share_scope(handler, updated.get("profile", ""), updated.get("target", "")):
+            scoped_todo = self.store.get_todo(todo_id)
+            if not self.require_share_scope(handler, scoped_todo.get("profile", ""), scoped_todo.get("target", "")):
                 return
-            # If report requests done/verified, append evidence first so DoD constraints are satisfiable.
-            if status.strip().lower() in {"done", "verified"} and evidence not in (None, "", []):
-                if isinstance(evidence, list):
-                    for item in evidence:
-                        updated = self.store.append_todo_evidence(updated["id"], item, actor=request_actor)
-                else:
-                    updated = self.store.append_todo_evidence(updated["id"], evidence, actor=request_actor)
-                evidence = None
-            if status:
-                updated = self.store.update_todo_status(
-                    todo_id=todo_id,
-                    status=status,
-                    progress_note=progress_note,
-                    actor=request_actor,
-                )
-            elif progress_note.strip():
-                event = {
-                    "type": "status",
-                    "status": updated.get("status", ""),
-                    "note": progress_note.strip(),
-                    "actor": request_actor,
-                    "created_at": "",
-                }
-                updated["events"] = [event, *(updated.get("events", []) or [])]
-                updated["progress_note"] = progress_note.strip()
-                updated = self.store.save_todo(updated)
+            updated = self.apply_todo_report(
+                todo_id=todo_id,
+                status=status,
+                progress_note=progress_note,
+                evidence=evidence,
+                actor=request_actor,
+            )
+            dispatches = self.auto_dispatch_ready_todos(profile_name=updated["profile"]) if str(updated.get("status", "")).strip().lower() in FINAL_TODO_STATUSES else []
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "todo": updated, "dispatches": dispatches})
+            return
 
-            if evidence not in (None, "", []):
-                if isinstance(evidence, list):
-                    for item in evidence:
-                        updated = self.store.append_todo_evidence(updated["id"], item, actor=request_actor)
-                else:
-                    updated = self.store.append_todo_evidence(updated["id"], evidence, actor=request_actor)
-
+        if parsed.path == "/api/supervisor/config/save":
+            if not self.require_role(handler, "operator"):
+                return
+            profile_name = str(body.get("profile", "")).strip()
+            if profile_name and not self.require_share_scope(handler, profile_name, ""):
+                return
+            config = self.store.save_supervisor_config(body)
             self.record_audit_safe(
                 {
-                    "action": "todo.report",
-                    "profile": updated["profile"],
-                    "target": updated["target"],
-                    "alias": updated.get("alias", ""),
-                    "todo_id": updated["id"],
-                    "status": updated["status"],
-                    "note": progress_note.strip(),
-                    "actor": request_actor,
+                    "action": "supervisor.config.save",
+                    "profile": config.get("profile", ""),
+                    "note": config.get("name", ""),
+                    "actor": actor,
                 }
             )
-            self.json_response(handler, HTTPStatus.OK, {"ok": True, "todo": updated})
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "config": mask_supervisor_config(config)})
+            return
+
+        if parsed.path == "/api/supervisor/config/delete":
+            if not self.require_role(handler, "operator"):
+                return
+            config_id = str(body.get("id", "")).strip()
+            config = self.store.get_supervisor_config(config_id=config_id)
+            if config.get("profile") and not self.require_share_scope(handler, str(config.get("profile", "")), ""):
+                return
+            self.store.delete_supervisor_config(config_id)
+            self.record_audit_safe({"action": "supervisor.config.delete", "profile": config.get("profile", ""), "note": config_id, "actor": actor})
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "id": config_id})
+            return
+
+        if parsed.path == "/api/supervisor/dispatch":
+            if not self.require_role(handler, "operator"):
+                return
+            todo_id = str(body.get("todo_id", "")).strip()
+            if not todo_id:
+                raise ValueError("todo_id is required")
+            todo = self.store.get_todo(todo_id)
+            if not self.require_share_scope(handler, todo.get("profile", ""), todo.get("target", "")):
+                return
+            config = self.store.get_supervisor_config(config_id=str(body.get("config_id", "")).strip(), profile_name=str(todo.get("profile", "")).strip())
+            self.require_supervisor_permission(config, "dispatch")
+            decision = self.supervisor_client.dispatch(config=config, todo=todo, candidates=self.list_supervisor_candidates(str(todo.get("profile", "")).strip()))
+            apply_decision = bool(body.get("apply", True))
+            auto_send = bool(body.get("auto_send", True))
+            updated = todo
+            dispatch_result: dict[str, Any] = {"dispatched": False}
+            if apply_decision:
+                updated = self.store.save_todo({**todo, "id": todo["id"], "target": decision["target"], "alias": decision.get("alias", "")})
+                self.record_audit_safe(
+                    {
+                        "action": "supervisor.dispatch",
+                        "profile": updated["profile"],
+                        "target": updated["target"],
+                        "alias": updated.get("alias", ""),
+                        "todo_id": updated["id"],
+                        "status": updated["status"],
+                        "note": decision.get("reason", ""),
+                        "actor": actor,
+                    }
+                )
+                if auto_send and str(updated.get("status", "")).strip().lower() == "todo":
+                    dispatch_result = self.auto_dispatch_todo(updated, actor="supervisor")
+                    updated = dispatch_result.get("todo", updated)
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "decision": decision, "todo": updated, "dispatch": dispatch_result})
+            return
+
+        if parsed.path == "/api/supervisor/review":
+            if not self.require_role(handler, "operator"):
+                return
+            todo_id = str(body.get("todo_id", "")).strip()
+            if not todo_id:
+                raise ValueError("todo_id is required")
+            todo = self.store.get_todo(todo_id)
+            if not self.require_share_scope(handler, todo.get("profile", ""), todo.get("target", "")):
+                return
+            config = self.store.get_supervisor_config(config_id=str(body.get("config_id", "")).strip(), profile_name=str(todo.get("profile", "")).strip())
+            self.require_supervisor_permission(config, "review")
+            pane_output = str(body.get("pane_output", ""))
+            if not pane_output and bool(body.get("include_pane_output", True)):
+                pane_output = self.capture_todo_output(todo)
+            review = self.supervisor_client.review(config=config, todo=todo, pane_output=pane_output)
+            apply_review = bool(body.get("apply", False))
+            updated = todo
+            if apply_review:
+                evidence = review.get("evidence", [])
+                if review["verdict"] == "accept":
+                    target_status = "verified" if str(todo.get("status", "")).strip().lower() in {"done", "verified"} else "done"
+                    updated = self.apply_todo_report(todo_id=todo_id, status=target_status, progress_note=review.get("summary", ""), evidence=evidence, actor="supervisor")
+                elif review["verdict"] == "blocked":
+                    updated = self.apply_todo_report(todo_id=todo_id, status="blocked", progress_note=review.get("summary", ""), evidence=evidence, actor="supervisor")
+                else:
+                    updated = self.apply_todo_report(todo_id=todo_id, status="", progress_note=review.get("summary", ""), evidence=evidence, actor="supervisor")
+            self.record_audit_safe(
+                {
+                    "action": "supervisor.review",
+                    "profile": updated.get("profile", ""),
+                    "target": updated.get("target", ""),
+                    "alias": updated.get("alias", ""),
+                    "todo_id": updated.get("id", ""),
+                    "status": updated.get("status", ""),
+                    "note": review.get("summary", ""),
+                    "actor": actor,
+                    "payload": {"verdict": review.get("verdict", "needs_work")},
+                }
+            )
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "review": review, "todo": updated})
+            return
+
+        if parsed.path == "/api/supervisor/accept":
+            if not self.require_role(handler, "operator"):
+                return
+            todo_id = str(body.get("todo_id", "")).strip()
+            if not todo_id:
+                raise ValueError("todo_id is required")
+            todo = self.store.get_todo(todo_id)
+            if not self.require_share_scope(handler, todo.get("profile", ""), todo.get("target", "")):
+                return
+            config = self.store.get_supervisor_config(config_id=str(body.get("config_id", "")).strip(), profile_name=str(todo.get("profile", "")).strip())
+            self.require_supervisor_permission(config, "accept")
+            pane_output = str(body.get("pane_output", ""))
+            if not pane_output and bool(body.get("include_pane_output", True)):
+                pane_output = self.capture_todo_output(todo)
+            review = self.supervisor_client.review(config=config, todo=todo, pane_output=pane_output)
+            if review.get("verdict") != "accept":
+                self.json_response(handler, HTTPStatus.OK, {"ok": True, "accepted": False, "review": review, "todo": todo})
+                return
+            evidence = review.get("evidence", [])
+            current_status = str(todo.get("status", "")).strip().lower()
+            updated = todo
+            if current_status not in {"done", "verified"}:
+                updated = self.apply_todo_report(todo_id=todo_id, status="done", progress_note=review.get("summary", ""), evidence=evidence, actor="supervisor")
+                evidence = []
+            if str(updated.get("status", "")).strip().lower() != "verified":
+                updated = self.apply_todo_report(todo_id=todo_id, status="verified", progress_note=review.get("summary", ""), evidence=evidence, actor="supervisor")
+            self.record_audit_safe(
+                {
+                    "action": "supervisor.accept",
+                    "profile": updated.get("profile", ""),
+                    "target": updated.get("target", ""),
+                    "alias": updated.get("alias", ""),
+                    "todo_id": updated.get("id", ""),
+                    "status": updated.get("status", ""),
+                    "note": review.get("summary", ""),
+                    "actor": actor,
+                }
+            )
+            self.json_response(handler, HTTPStatus.OK, {"ok": True, "accepted": True, "review": review, "todo": updated})
             return
 
         if parsed.path == "/api/todo-templates/save":
@@ -1263,6 +2003,20 @@ def build_handler(app: ClawDoneApp) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class ClawDoneServer(ThreadingHTTPServer):
+    def __init__(self, server_address: tuple[str, int], handler_cls: type[BaseHTTPRequestHandler], app: ClawDoneApp):
+        super().__init__(server_address, handler_cls)
+        self.app = app
+
+    def shutdown(self) -> None:
+        self.app.stop_background_tasks()
+        super().shutdown()
+
+    def server_close(self) -> None:
+        self.app.stop_background_tasks()
+        super().server_close()
+
+
 def create_server(
     config: dict[str, Any],
     tmux_client: TmuxClient | None = None,
@@ -1270,4 +2024,6 @@ def create_server(
     remote_tmux: RemoteTmuxClient | None = None,
 ) -> ThreadingHTTPServer:
     app = ClawDoneApp(config=config, tmux_client=tmux_client, store=store, remote_tmux=remote_tmux)
-    return ThreadingHTTPServer((app.config["host"], app.config["port"]), build_handler(app))
+    server = ClawDoneServer((app.config["host"], app.config["port"]), build_handler(app), app)
+    app.start_background_tasks()
+    return server

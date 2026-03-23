@@ -27,7 +27,8 @@ from clawdone.app import (
     normalize_profile,
 )
 from clawdone.html import INDEX_HTML
-from clawdone.web import render_index_html
+from clawdone.supervisor import SupervisorClient, normalize_supervisor_config
+from clawdone.web import ClawDoneApp, render_index_html
 
 
 
@@ -61,6 +62,18 @@ class FakeSSHExecutor:
         if profile_name in self.failures:
             raise RuntimeError(self.failures[profile_name])
         return self.responses.get((profile_name, command), command_result(0, ""))
+
+
+class FakeSupervisorTransport:
+    def __init__(self, responses: list[dict] | None = None):
+        self.responses = responses or []
+        self.calls: list[dict[str, object]] = []
+
+    def post_json(self, url: str, headers: dict[str, str], payload: dict[str, object], timeout: float) -> dict[str, object]:
+        self.calls.append({"url": url, "headers": headers, "payload": payload, "timeout": timeout})
+        if self.responses:
+            return self.responses.pop(0)
+        return {"choices": [{"message": {"content": "{}"}}]}
 
 
 class TmuxClientTests(unittest.TestCase):
@@ -131,7 +144,8 @@ class HtmlTests(unittest.TestCase):
         self.assertIn('<div class="chatbot-sidebar-title">Agents</div>', INDEX_HTML)
         self.assertIn('class="worker-avatar"', INDEX_HTML)
         self.assertIn('id="todoBoard" class="todo-board"', INDEX_HTML)
-        self.assertIn('Task board', INDEX_HTML)
+        self.assertIn('id="clearCompletedTodos"', INDEX_HTML)
+        self.assertIn('Checklist', INDEX_HTML)
         self.assertNotIn('Choose profile → session → window → pane first.', INDEX_HTML)
 
     def test_runtime_js_keeps_escaped_newline_sequences(self) -> None:
@@ -310,6 +324,72 @@ class ProfileStoreTests(unittest.TestCase):
             self.assertEqual(verified["verified_by"], "reviewer")
             self.assertTrue(verified["verified_at"])
 
+    def test_clear_completed_todos_scopes_to_profile_and_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            store.save_profile({"name": "lab", "host": "10.0.0.2", "username": "ubuntu"})
+
+            todo_keep_profile = store.save_todo({"title": "Keep other profile", "profile": "lab", "target": "codex:0.0"})
+            todo_keep_target = store.save_todo({"title": "Keep other target", "profile": "office", "target": "codex:0.1"})
+            todo_todo = store.save_todo({"title": "Keep open", "profile": "office", "target": "codex:0.0"})
+            todo_done = store.save_todo({"title": "Done task", "profile": "office", "target": "codex:0.0"})
+            todo_verified = store.save_todo({"title": "Verified task", "profile": "office", "target": "codex:0.0"})
+
+            store.append_todo_evidence(todo_done["id"], {"type": "summary", "content": "done"}, actor="agent")
+            store.update_todo_status(todo_done["id"], "done", actor="agent")
+            store.append_todo_evidence(todo_verified["id"], {"type": "summary", "content": "verified"}, actor="agent")
+            store.update_todo_status(todo_verified["id"], "done", actor="agent")
+            store.update_todo_status(todo_verified["id"], "verified", actor="reviewer")
+
+            removed = store.clear_completed_todos(profile_name="office", target="codex:0.0", keep_recent=0, min_age_days=0)
+            self.assertEqual({item["id"] for item in removed}, {todo_done["id"], todo_verified["id"]})
+            remaining_ids = {item["id"] for item in store.list_todos()}
+            self.assertIn(todo_keep_profile["id"], remaining_ids)
+            self.assertIn(todo_keep_target["id"], remaining_ids)
+            self.assertIn(todo_todo["id"], remaining_ids)
+            self.assertNotIn(todo_done["id"], remaining_ids)
+            self.assertNotIn(todo_verified["id"], remaining_ids)
+
+    def test_clear_completed_todos_keeps_recent_items_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+
+            completed_ids: list[str] = []
+            for index in range(7):
+                todo = store.save_todo({"title": f"Completed {index}", "profile": "office", "target": "codex:0.0"})
+                store.append_todo_evidence(todo["id"], {"type": "summary", "content": f"done {index}"}, actor="agent")
+                updated = store.update_todo_status(todo["id"], "done", actor="agent")
+                completed_ids.append(updated["id"])
+
+            removed = store.clear_completed_todos(profile_name="office", target="codex:0.0")
+            self.assertEqual(len(removed), 2)
+            remaining_completed = [todo for todo in store.list_todos(profile_name="office", target="codex:0.0") if todo["status"] in {"done", "verified"}]
+            self.assertEqual(len(remaining_completed), 5)
+
+    def test_save_and_mask_supervisor_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            saved = store.save_supervisor_config(
+                {
+                    "name": "Project Supervisor",
+                    "profile": "office",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "gpt-4.1-mini",
+                    "api_key": "secret-key",
+                    "permissions": ["dispatch", "review", "accept"],
+                }
+            )
+            self.assertEqual(saved["profile"], "office")
+            masked = store.get_supervisor_config(profile_name="office")
+            self.assertEqual(masked["api_key"], "secret-key")
+            updated = store.save_supervisor_config({"id": saved["id"], "name": "Project Supervisor", "profile": "office", "api_key": ""})
+            self.assertEqual(updated["api_key"], "secret-key")
+            store.delete_supervisor_config(saved["id"])
+            self.assertEqual(store.list_supervisor_configs("office"), [])
+
     def test_triplet_workflow_events_metrics_and_share_templates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             store = ProfileStore(Path(temp_dir) / "profiles.json")
@@ -358,6 +438,321 @@ class ProfileStoreTests(unittest.TestCase):
                 }
             )
             self.assertEqual(store.list_workspace_templates("office", "codex:0.0")[0]["id"], workspace["id"])
+
+    def test_app_auto_dispatches_and_ingests_agent_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            executor = FakeSSHExecutor()
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=executor),
+            )
+            todo = store.save_todo({"title": "Fix auth flaky test", "detail": "run tests and summarize", "profile": "office", "target": "codex:0.0"})
+
+            dispatch = app.auto_dispatch_todo(todo)
+            self.assertTrue(dispatch["dispatched"])
+            self.assertEqual(dispatch["todo"]["status"], "in_progress")
+            self.assertTrue(any("tmux send-keys -t codex:0.0 -l" in command for _, command in executor.commands))
+            self.assertTrue(any(command.endswith(" Enter") for _, command in executor.commands))
+
+            report = json.dumps(
+                {
+                    "todo_id": todo["id"],
+                    "status": "done",
+                    "progress_note": "implemented fix and tests passed",
+                    "evidence": [{"type": "summary", "content": "patched auth retry logic and verified the flaky test"}],
+                }
+            )
+            applied = app.process_pane_reports("office", "codex:0.0", f"ready\nCLAWDONE_REPORT {report}\n")
+            self.assertEqual(len(applied), 1)
+            updated = store.get_todo(todo["id"])
+            self.assertEqual(updated["status"], "done")
+            self.assertEqual(updated["evidence"][0]["type"], "summary")
+
+            app.process_pane_reports("office", "codex:0.0", f"ready\nCLAWDONE_REPORT {report}\n")
+            deduped = store.get_todo(todo["id"])
+            self.assertEqual(len(deduped["evidence"]), 1)
+
+    def test_app_ingests_wrapped_agent_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=FakeSSHExecutor()),
+            )
+            todo = store.save_todo({"title": "Wrap report", "profile": "office", "target": "codex:0.0"})
+            store.update_todo_status(todo["id"], "in_progress", actor="autopilot")
+
+            wrapped_report = """CLAWDONE_REPORT {
+  "todo_id": "%s",
+  "status": "done",
+  "progress_note": "wrapped report applied",
+  "evidence": [{"type": "summary", "content": "verified from wrapped output"}]
+}
+""" % todo["id"]
+            applied = app.process_pane_reports("office", "codex:0.0", wrapped_report)
+            self.assertEqual(len(applied), 1)
+            updated = store.get_todo(todo["id"])
+            self.assertEqual(updated["status"], "done")
+            self.assertEqual(updated["progress_note"], "wrapped report applied")
+
+    def test_auto_dispatch_todo_does_not_double_send_under_race(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+
+            class SlowExecutor(FakeSSHExecutor):
+                def run(self, profile: dict, command: str) -> dict:
+                    if "send-keys" in command and " -l " in command:
+                        time.sleep(0.1)
+                    return super().run(profile, command)
+
+            executor = SlowExecutor()
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=executor),
+            )
+            todo = store.save_todo({"title": "Race dispatch", "profile": "office", "target": "codex:0.0"})
+            threads = [threading.Thread(target=app.auto_dispatch_todo, args=(todo["id"],)) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            sent = [command for _, command in executor.commands if "send-keys" in command and " -l " in command]
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(store.get_todo(todo["id"])["status"], "in_progress")
+
+    def test_app_auto_dispatches_next_workflow_agent_when_unblocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            executor = FakeSSHExecutor()
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=executor),
+            )
+            workflow = store.create_workflow_triplet(
+                {
+                    "title": "Release blocker",
+                    "detail": "plan, fix, verify",
+                    "profile": "office",
+                    "target": "codex:0.0",
+                    "planner_target": "codex:0.0",
+                    "executor_target": "codex:0.1",
+                    "reviewer_target": "codex:0.2",
+                }
+            )
+            todos = store.list_workflow_todos(workflow["workflow_id"])
+            planner = todos[0]
+            executor_todo = todos[1]
+
+            dispatched = app.auto_dispatch_ready_todos(profile_name="office")
+            self.assertEqual(len(dispatched), 1)
+            self.assertEqual(dispatched[0]["todo"]["id"], planner["id"])
+            self.assertEqual(store.get_todo(planner["id"])["status"], "in_progress")
+            self.assertEqual(store.get_todo(executor_todo["id"])["status"], "todo")
+
+            planner_report = json.dumps(
+                {
+                    "todo_id": planner["id"],
+                    "status": "done",
+                    "progress_note": "plan complete",
+                    "evidence": [{"type": "summary", "content": "implementation plan prepared"}],
+                }
+            )
+            app.process_pane_reports("office", "codex:0.0", f"CLAWDONE_REPORT {planner_report}\n")
+            self.assertEqual(store.get_todo(executor_todo["id"])["status"], "in_progress")
+            self.assertTrue(any("codex:0.1" in command for _, command in executor.commands))
+
+
+class SupervisorModuleTests(unittest.TestCase):
+    def test_normalize_supervisor_config_defaults(self) -> None:
+        config = normalize_supervisor_config({"name": "Supervisor"})
+        self.assertEqual(config["provider"], "openai_compatible")
+        self.assertIn("dispatch", config["permissions"])
+        self.assertTrue(config["auto_dispatch"])
+        self.assertTrue(config["auto_review"])
+        self.assertTrue(config["auto_accept"])
+
+    def test_supervisor_dispatch_parses_openai_compatible_response(self) -> None:
+        transport = FakeSupervisorTransport(
+            responses=[
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "target": "codex:0.1",
+                                        "alias": "backend",
+                                        "reason": "backend agent matches the bugfix scope",
+                                        "confidence": 0.92,
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            ]
+        )
+        client = SupervisorClient(transport=transport)
+        config = normalize_supervisor_config({"api_key": "sk-test"})
+        decision = client.dispatch(
+            config=config,
+            todo={"title": "Fix flaky auth test", "detail": "patch retries and rerun tests", "role": "general", "priority": "high"},
+            candidates=[
+                {"target": "codex:0.0", "alias": "frontend", "session": "codex", "window_name": "ui", "command": "node"},
+                {"target": "codex:0.1", "alias": "backend", "session": "codex", "window_name": "api", "command": "python"},
+            ],
+        )
+        self.assertEqual(decision["target"], "codex:0.1")
+        self.assertEqual(decision["alias"], "backend")
+        self.assertGreater(decision["confidence"], 0.9)
+
+    def test_supervisor_review_parses_verdict(self) -> None:
+        transport = FakeSupervisorTransport(
+            responses=[
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "verdict": "accept",
+                                        "summary": "Tests passed and evidence is sufficient.",
+                                        "required_fixes": [],
+                                        "evidence": [{"type": "summary", "content": "validated by supervisor"}],
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            ]
+        )
+        client = SupervisorClient(transport=transport)
+        config = normalize_supervisor_config({"api_key": "sk-test"})
+        review = client.review(
+            config=config,
+            todo={"title": "Ship patch", "detail": "", "status": "done", "progress_note": "all green", "evidence": [{"type": "summary", "content": "tests passed"}]},
+            pane_output="pytest passed",
+        )
+        self.assertEqual(review["verdict"], "accept")
+        self.assertEqual(review["evidence"][0]["type"], "summary")
+
+
+    def test_app_supervisor_auto_routes_pending_todo(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            store.save_supervisor_config(
+                {
+                    "name": "Supervisor",
+                    "profile": "office",
+                    "api_key": "sk-test",
+                    "auto_dispatch": True,
+                    "auto_review": False,
+                    "auto_accept": False,
+                }
+            )
+            executor = FakeSSHExecutor()
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=executor),
+            )
+            app.supervisor_client = SupervisorClient(
+                transport=FakeSupervisorTransport(
+                    responses=[
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": json.dumps(
+                                            {
+                                                "target": "codex:0.1",
+                                                "alias": "backend",
+                                                "reason": "best match",
+                                                "confidence": 0.95,
+                                            }
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                )
+            )
+            app.list_supervisor_candidates = lambda profile_name: [
+                {"target": "codex:0.0", "alias": "frontend", "session": "codex", "window_name": "ui", "command": "node"},
+                {"target": "codex:0.1", "alias": "backend", "session": "codex", "window_name": "api", "command": "python"},
+            ]
+            todo = store.save_todo({"title": "Fix flaky auth", "detail": "backend work", "profile": "office", "target": "codex:0.0"})
+            dispatched = app.auto_dispatch_ready_todos(profile_name="office")
+            self.assertEqual(len(dispatched), 1)
+            updated = store.get_todo(todo["id"])
+            self.assertEqual(updated["target"], "codex:0.1")
+            self.assertEqual(updated["status"], "in_progress")
+            self.assertTrue(any("codex:0.1" in command for _, command in executor.commands))
+
+    def test_app_supervisor_auto_reviews_and_accepts_done_work(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            store.save_supervisor_config(
+                {
+                    "name": "Supervisor",
+                    "profile": "office",
+                    "api_key": "sk-test",
+                    "auto_dispatch": False,
+                    "auto_review": True,
+                    "auto_accept": True,
+                }
+            )
+            executor = FakeSSHExecutor()
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=executor),
+            )
+            app.supervisor_client = SupervisorClient(
+                transport=FakeSupervisorTransport(
+                    responses=[
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": json.dumps(
+                                            {
+                                                "verdict": "accept",
+                                                "summary": "delivery verified by supervisor",
+                                                "required_fixes": [],
+                                                "evidence": [{"type": "summary", "content": "supervisor accepted the delivery"}],
+                                            }
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                )
+            )
+            todo = store.save_todo({"title": "Ship patch", "profile": "office", "target": "codex:0.0"})
+            store.append_todo_evidence(todo["id"], {"type": "summary", "content": "tests passed"}, actor="agent")
+            updated = app.apply_todo_report(todo_id=todo["id"], status="done", progress_note="delivery complete", evidence=None, actor="agent")
+            self.assertEqual(updated["status"], "verified")
+            logs = store.list_audit_logs(profile_name="office", target="codex:0.0", limit=20)
+            actions = {entry["action"] for entry in logs if entry.get("todo_id") == todo["id"]}
+            self.assertIn("supervisor.auto_review", actions)
+            self.assertIn("supervisor.auto_accept", actions)
+
 
 
 class RemoteTmuxClientTests(unittest.TestCase):

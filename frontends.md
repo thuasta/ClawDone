@@ -2,7 +2,7 @@
 
 更新时间：2026-03-21
 
-目标：找适合 `ClawDone / PocketClaw` 这类“手机端控制远端 tmux / Codex worker”的高星 GitHub 前端参考，不只是好看，还要能直接借鉴到：
+目标：找适合 `ClawDone` 这类“手机端控制远端 tmux / Codex worker”的高星 GitHub 前端参考，不只是好看，还要能直接借鉴到：
 
 - 移动端聊天体验
 - 多会话 / 多 worker 视图
