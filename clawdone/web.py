@@ -604,10 +604,23 @@ class ClawDoneApp:
             )
             return None
 
+    def _build_recent_audit_set(self, actions: set[str]) -> set[str]:
+        """Build a set of todo_ids that have recent audit entries for the given actions."""
+        logs = self.store.list_audit_logs(limit=500)
+        return {
+            str(entry.get("todo_id", "")).strip()
+            for entry in logs
+            if str(entry.get("action", "")).strip() in actions
+        }
+
     def process_supervisor_review_queue(self) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
+        reviewed_todo_ids = self._build_recent_audit_set({"supervisor.auto_review", "supervisor.auto_accept"})
         for todo in self.store.list_todos():
             if str(todo.get("status", "")).strip().lower() not in FINAL_TODO_STATUSES:
+                continue
+            todo_id = str(todo.get("id", "")).strip()
+            if todo_id in reviewed_todo_ids:
                 continue
             result = self.maybe_run_supervisor_review(todo, actor="supervisor")
             if result is not None:

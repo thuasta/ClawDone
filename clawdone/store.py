@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import copy
 import json
+import os
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -304,8 +304,10 @@ class ProfileStore:
     def __init__(self, path: str | Path):
         self.path = Path(path).expanduser()
         self._lock = threading.Lock()
-        self._cache: dict | None = None
+        self._cache: dict[str, Any] | None = None
         self._cache_mtime: float = 0.0
+        self._normalized_todos: list[dict[str, Any]] | None = None
+        self._normalized_todos_mtime: float = 0.0
 
     def _empty(self) -> dict[str, Any]:
         return {
@@ -322,11 +324,15 @@ class ProfileStore:
         }
 
     def _read(self) -> dict[str, Any]:
+        """Return cached store data. The returned dict MUST NOT be mutated."""
         if not self.path.exists():
             return self._empty()
-        current_mtime = self.path.stat().st_mtime_ns
+        try:
+            current_mtime = os.stat(self.path).st_mtime_ns
+        except OSError:
+            return self._empty()
         if self._cache is not None and current_mtime == self._cache_mtime:
-            return copy.deepcopy(self._cache)
+            return self._cache
         content = self.path.read_text(encoding="utf-8").strip()
         if not content:
             return self._empty()
@@ -346,7 +352,7 @@ class ProfileStore:
         data.setdefault("session_shares", [])
         data.setdefault("workspace_templates", [])
         data.setdefault("supervisor_configs", [])
-        self._cache = copy.deepcopy(data)
+        self._cache = data
         self._cache_mtime = current_mtime
         return data
 
@@ -357,8 +363,13 @@ class ProfileStore:
             handle.write("\n")
             temp_name = handle.name
         Path(temp_name).replace(self.path)
-        self._cache = copy.deepcopy(data)
-        self._cache_mtime = self.path.stat().st_mtime_ns
+        # Update cache with the data we just wrote
+        try:
+            self._cache_mtime = os.stat(self.path).st_mtime_ns
+        except OSError:
+            self._cache_mtime = 0.0
+        self._cache = data
+        self._normalized_todos = None  # Invalidate normalized cache
 
     # ------------------------------------------------------------------
     # Private unlocked helpers (assume self._lock is already held)
@@ -624,17 +635,31 @@ class ProfileStore:
             ]
         self._write(data)
 
-    def list_todos(self, profile_name: str = "", target: str = "", status: str = "") -> list[dict[str, Any]]:
+    def _list_todos_unlocked(self, profile_name: str = "", target: str = "", status: str = "") -> list[dict[str, Any]]:
         desired_status = str(status).strip().lower()
         if desired_status and desired_status not in TODO_STATUSES:
             allowed = ", ".join(sorted(TODO_STATUSES))
             raise ValueError(f"todo status must be one of: {allowed}")
-        todos = self._read().get("todos", [])
+
+        data = self._read()
+
+        # Use cached normalized todos if available and fresh
+        cache_key = id(data)  # Same reference = same data (immutable snapshot)
+        if self._normalized_todos is not None and self._normalized_todos_mtime == cache_key:
+            all_todos = self._normalized_todos
+        else:
+            all_todos = []
+            for item in data.get("todos", []):
+                if isinstance(item, dict):
+                    all_todos.append(normalize_todo(item))
+            self._normalized_todos = all_todos
+            self._normalized_todos_mtime = cache_key
+
+        if not profile_name and not target and not desired_status:
+            return all_todos
+
         result: list[dict[str, Any]] = []
-        for item in todos:
-            if not isinstance(item, dict):
-                continue
-            todo = normalize_todo(item)
+        for todo in all_todos:
             if profile_name and todo["profile"] != profile_name:
                 continue
             if target and todo["target"] != target:
@@ -648,9 +673,10 @@ class ProfileStore:
         cleaned_id = str(todo_id).strip()
         if not cleaned_id:
             raise ValueError("todo id is required")
-        for todo in self._list_todos_unlocked():
-            if todo["id"] == cleaned_id:
-                return todo
+        data = self._read()
+        for item in data.get("todos", []):
+            if isinstance(item, dict) and str(item.get("id", "")).strip() == cleaned_id:
+                return normalize_todo(item)
         raise RuntimeError(f"todo not found: {cleaned_id}")
 
     def _save_todo_unlocked(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1234,11 +1260,11 @@ class ProfileStore:
             if not entry["action"]:
                 raise ValueError("audit action is required")
             data = self._read()
-            history = [entry]
-            for item in data.get("audit_logs", []):
-                if isinstance(item, dict):
-                    history.append(normalize_audit_entry(item))
-            data["audit_logs"] = history[: max(1, limit)]
+            # Prepend new entry and truncate without re-normalizing existing entries
+            existing = data.get("audit_logs", [])
+            if not isinstance(existing, list):
+                existing = []
+            data["audit_logs"] = [entry] + existing[:max(0, limit - 1)]
             self._write(data)
             return entry
 
