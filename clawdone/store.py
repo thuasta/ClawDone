@@ -1260,11 +1260,11 @@ class ProfileStore:
             if not entry["action"]:
                 raise ValueError("audit action is required")
             data = self._read()
-            history = [entry]
-            for item in data.get("audit_logs", []):
-                if isinstance(item, dict):
-                    history.append(normalize_audit_entry(item))
-            data["audit_logs"] = history[: max(1, limit)]
+            # Prepend new entry and truncate without re-normalizing existing entries
+            existing = data.get("audit_logs", [])
+            if not isinstance(existing, list):
+                existing = []
+            data["audit_logs"] = [entry] + existing[:max(0, limit - 1)]
             self._write(data)
             return entry
 
