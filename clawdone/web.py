@@ -2011,15 +2011,18 @@ def build_handler(app: ClawDoneApp) -> type[BaseHTTPRequestHandler]:
 
 class ClawDoneServer(ThreadingHTTPServer):
     def __init__(self, server_address: tuple[str, int], handler_cls: type[BaseHTTPRequestHandler], app: ClawDoneApp):
-        super().__init__(server_address, handler_cls)
+        # Set app first so cleanup paths (triggered during bind failure) can safely access it.
         self.app = app
+        super().__init__(server_address, handler_cls)
 
     def shutdown(self) -> None:
-        self.app.stop_background_tasks()
+        if getattr(self, "app", None):
+            self.app.stop_background_tasks()
         super().shutdown()
 
     def server_close(self) -> None:
-        self.app.stop_background_tasks()
+        if getattr(self, "app", None):
+            self.app.stop_background_tasks()
         super().server_close()
 
 

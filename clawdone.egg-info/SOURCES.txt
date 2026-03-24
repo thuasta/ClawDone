@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 clawdone/__init__.py
@@ -8,6 +9,8 @@ clawdone/html.py
 clawdone/local_tmux.py
 clawdone/remote.py
 clawdone/store.py
+clawdone/supervisor.py
+clawdone/utils.py
 clawdone/web.py
 clawdone.egg-info/PKG-INFO
 clawdone.egg-info/SOURCES.txt

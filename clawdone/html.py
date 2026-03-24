@@ -834,6 +834,10 @@ INDEX_HTML = """<!doctype html>
       grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
       gap: 14px;
       align-items: start;
+      position: relative;
+    }
+    .chat-sidebar-scrim {
+      display: none;
     }
     .chat-sidebar,
     .chat-main {
@@ -848,6 +852,24 @@ INDEX_HTML = """<!doctype html>
       padding: 14px 14px 10px;
       position: sticky;
       top: 12px;
+    }
+    .chat-sidebar-headline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .chat-sidebar-close {
+      display: none;
+      width: 34px;
+      min-height: 34px;
+      padding: 0;
+      border-radius: 10px;
+      font-size: 1.2rem;
+      line-height: 1;
+      color: var(--muted-foreground);
+      border-color: rgba(51, 65, 85, 0.85);
+      background: rgba(2, 6, 23, 0.5);
     }
     .chatbot-sidebar-header {
       display: grid;
@@ -888,48 +910,124 @@ INDEX_HTML = """<!doctype html>
       letter-spacing: 0.08em;
       font-weight: 700;
     }
-    .chat-main {
+    .chat-sidebar-actions {
       display: grid;
-      grid-template-rows: auto minmax(420px, 1fr) auto;
-      min-height: 760px;
+      gap: 8px;
+    }
+    .chat-sidebar-actions button {
+      width: 100%;
+    }
+    .chat-main {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      height: clamp(520px, calc(100dvh - 184px), 860px);
       overflow: hidden;
     }
     .chat-main-header {
       display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
+      align-items: center;
       gap: 12px;
-      padding: 16px 18px 14px;
+      padding: 13px 16px 12px;
       border-bottom: 1px solid rgba(51, 65, 85, 0.65);
       background: rgba(15, 23, 42, 0.96);
     }
+    .chat-sidebar-toggle {
+      display: none;
+      width: 36px;
+      min-height: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: 11px;
+      border-color: rgba(51, 65, 85, 0.85);
+      background: rgba(2, 6, 23, 0.55);
+      color: #dbeafe;
+      flex: 0 0 auto;
+      box-shadow: none;
+    }
+    .chat-sidebar-toggle:hover,
+    .chat-sidebar-close:hover {
+      background: rgba(30, 41, 59, 0.7);
+      border-color: rgba(96, 165, 250, 0.36);
+      transform: none;
+    }
+    .chat-sidebar-toggle:active,
+    .chat-sidebar-close:active {
+      transform: none;
+    }
+    .menu-icon {
+      position: relative;
+      display: inline-block;
+      width: 15px;
+      height: 2px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+    .menu-icon::before,
+    .menu-icon::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      width: 15px;
+      height: 2px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+    .menu-icon::before {
+      top: -5px;
+    }
+    .menu-icon::after {
+      top: 5px;
+    }
+    .chat-main-title {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+      flex: 1;
+    }
+    .chat-main-title h2 {
+      margin: 0;
+      font-size: 1.02rem;
+      letter-spacing: -0.02em;
+    }
     .chat-main-header .hint {
-      margin-top: 6px;
+      margin: 0;
       display: block;
-    }
-    .chat-main-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: flex-end;
-    }
-    .chat-main-actions button {
-      width: auto;
-      min-width: 112px;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 0.8rem;
+      color: var(--muted-foreground);
     }
     .chat-feed {
+      flex: 1 1 auto;
+      min-height: 0;
       display: grid;
       align-content: start;
-      gap: 14px;
+      gap: 10px;
       overflow: auto;
-      padding: 18px 18px 20px;
+      padding: 14px 14px 10px;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
       background:
-        radial-gradient(620px 240px at 50% 0, rgba(59, 130, 246, 0.12), rgba(59, 130, 246, 0) 70%),
-        linear-gradient(180deg, rgba(2, 6, 23, 0.12) 0%, rgba(2, 6, 23, 0.28) 100%);
+        radial-gradient(620px 220px at 50% 0, rgba(59, 130, 246, 0.1), rgba(59, 130, 246, 0) 72%),
+        linear-gradient(180deg, rgba(2, 6, 23, 0.1) 0%, rgba(2, 6, 23, 0.22) 100%);
+      overscroll-behavior: contain;
+    }
+    .chat-feed-more {
+      justify-self: center;
+      font-size: 0.72rem;
+      color: var(--muted-foreground);
+      border: 1px solid rgba(71, 85, 105, 0.6);
+      border-radius: 999px;
+      background: rgba(15, 23, 42, 0.6);
+      padding: 4px 10px;
+      margin-bottom: 2px;
     }
     .message {
       display: grid;
-      gap: 8px;
+      gap: 5px;
       width: 100%;
     }
     .message.user {
@@ -941,43 +1039,57 @@ INDEX_HTML = """<!doctype html>
     .message-meta {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       color: var(--muted-foreground);
-      font-size: 0.76rem;
-      padding: 0 6px;
+      font-size: 0.72rem;
+      padding: 0 2px;
       letter-spacing: 0.01em;
     }
     .message-body {
-      max-width: min(100%, 760px);
-      padding: 14px 16px;
-      border-radius: 18px;
-      border: 1px solid rgba(51, 65, 85, 0.8);
+      max-width: min(100%, 700px);
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(51, 65, 85, 0.7);
       white-space: pre-wrap;
       word-break: break-word;
-      line-height: 1.58;
-      box-shadow: 0 10px 24px rgba(2, 6, 23, 0.12);
+      line-height: 1.46;
+      box-shadow: none;
     }
     .message.user .message-body {
-      background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
-      border-color: rgba(96, 165, 250, 0.62);
+      background: #1d4ed8;
+      border-color: rgba(96, 165, 250, 0.55);
       color: #eff6ff;
       border-bottom-right-radius: 8px;
-      max-width: min(88%, 640px);
+      max-width: min(84%, 560px);
     }
     .message.agent .message-body {
-      background: rgba(17, 24, 39, 0.95);
-      color: #dbeafe;
+      background: rgba(15, 23, 42, 0.92);
+      color: #d7e5fb;
       border-bottom-left-radius: 8px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-family: inherit;
       font-size: 0.84rem;
-      max-width: min(92%, 760px);
+      max-width: min(90%, 700px);
+      max-height: min(75dvh, 560px);
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
     }
     .composer {
-      display: grid;
-      gap: 12px;
-      padding: 16px 18px 18px;
+      position: sticky;
+      bottom: 0;
+      z-index: 12;
+      display: block;
+      padding: 8px 10px 10px;
       border-top: 1px solid rgba(51, 65, 85, 0.65);
-      background: rgba(15, 23, 42, 0.98);
+      background: linear-gradient(180deg, rgba(11, 18, 34, 0.2) 0%, rgba(11, 18, 34, 0.96) 24%);
+    }
+    .composer-shell {
+      border: 1px solid rgba(100, 116, 139, 0.4);
+      border-radius: 24px;
+      background: rgba(15, 23, 42, 0.44);
+      backdrop-filter: blur(12px);
+      padding: 6px 6px 6px;
+      box-shadow: 0 4px 14px rgba(2, 6, 23, 0.22);
     }
     .composer-head {
       display: flex;
@@ -991,26 +1103,57 @@ INDEX_HTML = """<!doctype html>
       font-size: 0.92rem;
     }
     .chat-input {
-      min-height: 116px;
-      border-radius: 18px;
-      border-color: rgba(51, 65, 85, 0.95);
-      background: rgba(2, 6, 23, 0.85);
-      padding: 14px 16px;
-      line-height: 1.6;
+      min-height: 54px;
+      max-height: 150px;
+      border-radius: 16px;
+      border-color: transparent;
+      background: transparent;
+      padding: 8px 12px 4px;
+      line-height: 1.5;
+      resize: none;
+    }
+    .chat-input:focus {
+      border-color: transparent;
+      box-shadow: none;
     }
     .composer-actions {
       display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      justify-content: space-between;
-    }
-    .composer-actions .row-inline {
-      flex-wrap: wrap;
-      width: 100%;
-      justify-content: space-between;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 3px 6px 2px;
     }
     .composer-actions button {
-      flex: 1 1 140px;
+      flex: 0 0 auto;
+      width: auto;
+      min-height: 34px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      padding: 7px 12px;
+      box-shadow: none;
+    }
+    .send-command {
+      min-width: 74px;
+    }
+    .voice-toggle {
+      width: 34px;
+      min-width: 34px;
+      height: 34px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      color: #cbd5e1;
+    }
+    .voice-toggle svg {
+      width: 15px;
+      height: 15px;
+      fill: currentColor;
+    }
+    .voice-toggle.active {
+      color: #bfdbfe;
+      border-color: rgba(96, 165, 250, 0.56);
+      background: rgba(37, 99, 235, 0.2);
     }
     .thread-list {
       display: grid;
@@ -1331,7 +1474,8 @@ INDEX_HTML = """<!doctype html>
       padding: 14px 14px 12px;
     }
     .chat-main {
-      min-height: 680px;
+      min-height: 0;
+      height: clamp(500px, calc(100dvh - 190px), 800px);
     }
     .chat-main-header,
     .composer {
@@ -1346,29 +1490,84 @@ INDEX_HTML = """<!doctype html>
       background: rgba(6, 11, 23, 0.92);
       box-shadow: 0 10px 24px rgba(2, 6, 23, 0.26);
     }
+    body.chat-sidebar-open {
+      overflow: hidden;
+    }
     @media (max-width: 900px) {
-      .main-grid, .grid-2, .grid-3, .grid-4, .chatbot-layout, .workspace-grid, .settings-shell, .todo-shell, .delivery-shell, .stats-grid, .hero, .settings-options { grid-template-columns: 1fr; }
+      .main-grid, .grid-2, .grid-3, .grid-4, .workspace-grid, .settings-shell, .todo-shell, .delivery-shell, .stats-grid, .hero, .settings-options { grid-template-columns: 1fr; }
       .row-inline {
         flex-direction: column;
         align-items: stretch;
       }
+      .chatbot-layout {
+        grid-template-columns: 1fr;
+        gap: 0;
+        min-height: calc(100dvh - 140px);
+      }
+      .chat-sidebar-scrim {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(2, 6, 23, 0.66);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease;
+        z-index: 40;
+      }
+      .chatbot-layout.sidebar-open .chat-sidebar-scrim {
+        opacity: 1;
+        pointer-events: auto;
+      }
       .chat-sidebar {
-        position: static;
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: min(320px, 86vw);
+        max-width: 86vw;
+        height: 100dvh;
+        border-radius: 0 18px 18px 0;
+        padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+        transform: translateX(-104%);
+        transition: transform 220ms ease;
+        z-index: 42;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        box-shadow: 0 20px 48px rgba(2, 6, 23, 0.45);
+      }
+      .chatbot-layout.sidebar-open .chat-sidebar {
+        transform: translateX(0);
       }
       .chat-main {
-        min-height: 680px;
+        min-height: calc(100dvh - 140px);
+        height: calc(100dvh - 140px);
       }
-      .chat-main-header,
-      .composer-actions .row-inline {
-        flex-direction: column;
-        align-items: stretch;
+      .chat-main-header {
+        align-items: center;
       }
-      .chat-main-actions {
-        width: 100%;
-        justify-content: stretch;
+      .chat-sidebar-toggle {
+        display: grid;
+        place-items: center;
       }
-      .chat-main-actions button {
-        width: 100%;
+      .chat-sidebar-close {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .chat-main-title h2 {
+        font-size: 1rem;
+      }
+      .chat-main-title .hint {
+        font-size: 0.78rem;
+      }
+      .chat-sidebar-actions {
+        gap: 7px;
+      }
+      .chat-sidebar-actions button {
+        min-height: 38px;
+      }
+      .chat-main-header {
+        flex-direction: row;
       }
       .hero-top {
         align-items: stretch;
@@ -1691,11 +1890,23 @@ INDEX_HTML = """<!doctype html>
     </div>
 
     <div class="page-view" id="view-chat">
-    <section class="chatbot-layout">
-      <aside class="chat-sidebar">
+    <section class="chatbot-layout" id="chatLayout">
+      <div class="chat-sidebar-scrim" id="chatSidebarScrim" aria-hidden="true"></div>
+      <aside class="chat-sidebar" id="chatSidebar">
         <div class="chatbot-sidebar-header">
-          <h2>Work</h2>
+          <div class="chat-sidebar-headline">
+            <h2>Work</h2>
+            <button class="chat-sidebar-close ghost" id="chatSidebarClose" aria-label="Close work sidebar">×</button>
+          </div>
           <div class="hint">A lighter command view for the currently selected agent.</div>
+        </div>
+        <div class="chatbot-sidebar-panel">
+          <div class="chatbot-sidebar-title">Actions</div>
+          <div class="chat-sidebar-actions">
+            <button class="ghost" id="copyTargetLabel">Copy target</button>
+            <button class="secondary" id="refreshChatPane">Refresh pane</button>
+            <button class="danger" id="interrupt">Interrupt</button>
+          </div>
         </div>
         <div class="chatbot-agent-card">
           <div class="chatbot-sidebar-title">Active agent</div>
@@ -1719,29 +1930,26 @@ INDEX_HTML = """<!doctype html>
 
       <section class="chat-main">
         <div class="chat-main-header">
-          <div>
-            <h2>Command stream</h2>
+          <button class="chat-sidebar-toggle ghost" id="chatSidebarToggle" aria-label="Open work sidebar">
+            <span class="menu-icon" aria-hidden="true"></span>
+          </button>
+          <div class="chat-main-title">
+            <h2>Work</h2>
             <span class="hint" id="selectedPaneLabel">No window selected</span>
-          </div>
-          <div class="chat-main-actions">
-            <button class="ghost" id="copyTargetLabel">Copy</button>
-            <button class="secondary" id="refreshChatPane">Refresh</button>
-            <button class="danger" id="interrupt">Interrupt</button>
           </div>
         </div>
         <div id="chatFeed" class="chat-feed"></div>
         <pre id="paneOutput" style="display:none">Choose a target and window first.</pre>
         <div class="composer">
-          <div class="composer-head">
-            <label for="command">Message</label>
-          </div>
-          <textarea id="command" class="chat-input" placeholder="Describe the next step for the selected agent. Example: analyze the bug, patch it, run tests, then summarize the changes."></textarea>
-          <div class="composer-actions">
-            <div class="row-inline">
-              <button class="primary" id="sendCommand">Send</button>
-              <button class="ghost" id="appendNewline">New line</button>
-              <button class="primary" id="startVoice">Start voice</button>
-              <button class="secondary" id="stopVoice">Stop voice</button>
+          <div class="composer-shell">
+            <textarea id="command" class="chat-input" placeholder="Message the current thread…"></textarea>
+            <div class="composer-actions">
+              <button class="ghost voice-toggle" id="voiceToggle" aria-label="Start voice input" title="Start voice input">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3.5a3.5 3.5 0 0 0-3.5 3.5v5a3.5 3.5 0 1 0 7 0V7A3.5 3.5 0 0 0 12 3.5Zm-6 8.5a1 1 0 1 1 2 0 4 4 0 1 0 8 0 1 1 0 0 1 2 0 6 6 0 0 1-5 5.91V20h2a1 1 0 1 1 0 2H9a1 1 0 1 1 0-2h2v-2.09A6 6 0 0 1 6 12Z"></path>
+                </svg>
+              </button>
+              <button class="primary send-command" id="sendCommand">Send</button>
             </div>
           </div>
         </div>
@@ -1960,8 +2168,13 @@ INDEX_HTML = """<!doctype html>
     const chatViewEl = document.getElementById('view-chat');
     const todoViewEl = document.getElementById('view-todo');
     const deliveryViewEl = document.getElementById('view-delivery');
+    const chatLayoutEl = document.getElementById('chatLayout');
+    const chatSidebarScrimEl = document.getElementById('chatSidebarScrim');
+    const chatSidebarToggleEl = document.getElementById('chatSidebarToggle');
+    const chatSidebarCloseEl = document.getElementById('chatSidebarClose');
     const historySelect = document.getElementById('historySelect');
     const commandInput = document.getElementById('command');
+    const voiceToggleButton = document.getElementById('voiceToggle');
     const paneOutputEl = document.getElementById('paneOutput');
     const selectedPaneLabel = document.getElementById('selectedPaneLabel');
     const currentAgentLabelEl = document.getElementById('currentAgentLabel');
@@ -2181,6 +2394,19 @@ INDEX_HTML = """<!doctype html>
     let paneLoadVersion = 0;
     let todoLoadVersion = 0;
     let remoteStateLoadVersion = 0;
+    const CHAT_HISTORY_PAGE_SIZE = 40;
+    const CHAT_HISTORY_FETCH_LIMIT = 500;
+    const CHAT_SCROLL_TOP_THRESHOLD = 24;
+    const CHAT_SCROLL_BOTTOM_THRESHOLD = 48;
+    const SNAPSHOT_SCROLL_BOTTOM_THRESHOLD = 20;
+    const CHAT_INPUT_MIN_HEIGHT = 54;
+    const CHAT_INPUT_MAX_HEIGHT = 150;
+    let chatLoadedCount = CHAT_HISTORY_PAGE_SIZE;
+    let chatHasMoreHistory = false;
+    let chatLoadingOlder = false;
+    let chatActiveKey = '';
+    let chatStickToBottom = true;
+    let voiceListening = false;
 
     function headers() {
       const token = tokenInput.value.trim();
@@ -2367,6 +2593,51 @@ INDEX_HTML = """<!doctype html>
       return ['dashboard', 'auth', 'chat', 'todo', 'delivery'].includes(normalized) ? normalized : 'dashboard';
     }
 
+    const MOBILE_CHAT_BREAKPOINT = 900;
+    function isMobileChatLayout() {
+      return typeof window !== 'undefined' && window.matchMedia(`(max-width: ${MOBILE_CHAT_BREAKPOINT}px)`).matches;
+    }
+
+    function closeChatSidebar(force = false) {
+      if (!chatLayoutEl) return;
+      if (!force && !isMobileChatLayout()) return;
+      chatLayoutEl.classList.remove('sidebar-open');
+      document.body.classList.remove('chat-sidebar-open');
+    }
+
+    function openChatSidebar() {
+      if (!chatLayoutEl || !isMobileChatLayout()) return;
+      chatLayoutEl.classList.add('sidebar-open');
+      document.body.classList.add('chat-sidebar-open');
+    }
+
+    function toggleChatSidebar() {
+      if (!chatLayoutEl || !isMobileChatLayout()) return;
+      if (chatLayoutEl.classList.contains('sidebar-open')) {
+        closeChatSidebar(true);
+      } else {
+        openChatSidebar();
+      }
+    }
+
+    function syncChatSidebarLayout() {
+      if (!chatLayoutEl) return;
+      const mobile = isMobileChatLayout();
+      const previousMode = chatLayoutEl.dataset.layoutMode || '';
+      if (mobile) {
+        if (previousMode === 'desktop') {
+          chatLayoutEl.classList.remove('sidebar-open');
+        }
+        chatLayoutEl.dataset.layoutMode = 'mobile';
+        const isOpen = chatLayoutEl.classList.contains('sidebar-open');
+        document.body.classList.toggle('chat-sidebar-open', isOpen);
+        return;
+      }
+      chatLayoutEl.dataset.layoutMode = 'desktop';
+      chatLayoutEl.classList.add('sidebar-open');
+      document.body.classList.remove('chat-sidebar-open');
+    }
+
     function setActiveView(view) {
       const safeView = normalizeView(view);
       uiState.currentView = safeView;
@@ -2377,6 +2648,16 @@ INDEX_HTML = """<!doctype html>
       todoViewEl.classList.toggle('active', safeView === 'todo');
       deliveryViewEl.classList.toggle('active', safeView === 'delivery');
       viewButtons.forEach((button) => button.classList.toggle('active', button.dataset.viewButton === safeView));
+      if (safeView === 'chat') {
+        syncChatSidebarLayout();
+        window.setTimeout(() => {
+          if (typeof commandInput?.focus === 'function') {
+            commandInput.focus();
+          }
+        }, 0);
+      } else {
+        closeChatSidebar(true);
+      }
       if (typeof window.scrollTo === 'function') {
         window.scrollTo(0, 0);
       }
@@ -2513,24 +2794,105 @@ INDEX_HTML = """<!doctype html>
       return `${profile} → ${session.name}:${window.index}${alias}`;
     }
 
-    function renderChatFeed() {
+    function isChatNearBottom(threshold = CHAT_SCROLL_BOTTOM_THRESHOLD) {
+      if (!chatFeedEl) return true;
+      const distance = chatFeedEl.scrollHeight - chatFeedEl.scrollTop - chatFeedEl.clientHeight;
+      return distance <= threshold;
+    }
+
+    function syncCommandInputHeight() {
+      if (!commandInput) return;
+      commandInput.style.height = 'auto';
+      const naturalHeight = commandInput.scrollHeight || CHAT_INPUT_MIN_HEIGHT;
+      const nextHeight = Math.max(CHAT_INPUT_MIN_HEIGHT, Math.min(naturalHeight, CHAT_INPUT_MAX_HEIGHT));
+      commandInput.style.height = `${nextHeight}px`;
+      commandInput.style.overflowY = naturalHeight > CHAT_INPUT_MAX_HEIGHT ? 'auto' : 'hidden';
+    }
+
+    function syncVoiceToggleUi() {
+      if (!voiceToggleButton) return;
+      const available = Boolean(recognition);
+      const label = voiceListening ? 'Stop voice input' : 'Start voice input';
+      voiceToggleButton.classList.toggle('active', voiceListening);
+      voiceToggleButton.setAttribute('aria-label', label);
+      voiceToggleButton.title = label;
+      voiceToggleButton.disabled = !available;
+    }
+
+    function loadOlderChatHistory() {
+      if (chatLoadingOlder || !chatHasMoreHistory) return;
       const profile = currentProfileName();
       const target = currentTarget();
+      if (!profile || !target) return;
+      const relatedCount = historyCache.filter((entry) => entry.profile === profile && entry.target === target).length;
+      if (chatLoadedCount >= relatedCount) {
+        chatHasMoreHistory = false;
+        return;
+      }
+      chatLoadingOlder = true;
+      const anchor = { height: chatFeedEl.scrollHeight, top: chatFeedEl.scrollTop };
+      chatLoadedCount = Math.min(chatLoadedCount + CHAT_HISTORY_PAGE_SIZE, relatedCount);
+      renderChatFeed({ preserveAnchor: anchor });
+      chatLoadingOlder = false;
+    }
+
+    function renderChatFeed(options = {}) {
+      const forceBottom = Boolean(options.forceBottom);
+      const preserveAnchor = options.preserveAnchor || null;
+      const profile = currentProfileName();
+      const target = currentTarget();
+      const previousTop = chatFeedEl.scrollTop;
+      const wasNearBottom = isChatNearBottom();
+      const previousSnapshotBody = chatFeedEl.querySelector('.snapshot-body');
+      const previousSnapshotState = previousSnapshotBody ? {
+        top: previousSnapshotBody.scrollTop,
+        height: previousSnapshotBody.scrollHeight,
+        clientHeight: previousSnapshotBody.clientHeight,
+        nearBottom:
+          previousSnapshotBody.scrollHeight - previousSnapshotBody.scrollTop - previousSnapshotBody.clientHeight <= SNAPSHOT_SCROLL_BOTTOM_THRESHOLD,
+      } : null;
       chatFeedEl.innerHTML = '';
       if (!profile || !target) {
+        chatActiveKey = '';
+        chatLoadedCount = CHAT_HISTORY_PAGE_SIZE;
+        chatHasMoreHistory = false;
+        chatStickToBottom = true;
         chatFeedEl.innerHTML = '<div class="empty-state">Select a window to start.</div>';
         return;
       }
-      const relatedHistory = historyCache.filter((entry) => entry.profile === profile && entry.target === target);
-      const historyPage = paginate(relatedHistory, uiState.historyPage, uiSettings.historyPageSize);
-      uiState.historyPage = historyPage.page;
 
-      if (!historyPage.items.length && !latestPaneOutput.trim()) {
+      const relatedHistory = historyCache.filter((entry) => entry.profile === profile && entry.target === target);
+      const currentChatKey = `${profile}::${target}`;
+      let shouldForceBottom = forceBottom;
+      let shouldRestoreSnapshotScroll = Boolean(previousSnapshotState);
+      if (chatActiveKey !== currentChatKey) {
+        chatActiveKey = currentChatKey;
+        chatLoadedCount = Math.min(CHAT_HISTORY_PAGE_SIZE, relatedHistory.length);
+        chatStickToBottom = true;
+        shouldForceBottom = true;
+        shouldRestoreSnapshotScroll = false;
+      } else if (chatLoadedCount <= 0) {
+        chatLoadedCount = Math.min(CHAT_HISTORY_PAGE_SIZE, relatedHistory.length);
+      }
+      if (chatLoadedCount > relatedHistory.length) {
+        chatLoadedCount = relatedHistory.length;
+      }
+      chatHasMoreHistory = chatLoadedCount < relatedHistory.length;
+      const visibleHistory = [...relatedHistory.slice(0, chatLoadedCount)].reverse();
+
+      if (!visibleHistory.length && !latestPaneOutput.trim()) {
         chatFeedEl.innerHTML = '<div class="empty-state">No messages yet.</div>';
         return;
       }
 
-      [...historyPage.items].reverse().forEach((entry) => {
+      if (chatHasMoreHistory) {
+        const hint = document.createElement('div');
+        hint.className = 'chat-feed-more';
+        hint.textContent = 'Scroll up for earlier messages';
+        chatFeedEl.appendChild(hint);
+      }
+
+      visibleHistory.forEach((entry) => {
         const node = document.createElement('div');
         node.className = 'message user';
         const alias = entry.alias || entry.target;
@@ -2547,10 +2909,30 @@ INDEX_HTML = """<!doctype html>
       agentNode.className = 'message agent';
       agentNode.innerHTML = `
         <div class="message-meta">ClawDone · live window snapshot · ${escapeHtml(alias)}</div>
-        <div class="message-body">${escapeHtml(latestPaneOutput || '[empty window]')}</div>
+        <div class="message-body snapshot-body">${escapeHtml(latestPaneOutput || '[empty window]')}</div>
       `;
       chatFeedEl.appendChild(agentNode);
-      chatFeedEl.scrollTop = chatFeedEl.scrollHeight;
+      if (preserveAnchor) {
+        const nextTop = Math.max(0, chatFeedEl.scrollHeight - preserveAnchor.height + preserveAnchor.top);
+        chatFeedEl.scrollTop = nextTop;
+      } else if (shouldForceBottom || wasNearBottom || chatStickToBottom) {
+        chatFeedEl.scrollTop = chatFeedEl.scrollHeight;
+      } else {
+        const maxTop = Math.max(0, chatFeedEl.scrollHeight - chatFeedEl.clientHeight);
+        chatFeedEl.scrollTop = Math.min(previousTop, maxTop);
+      }
+      const nextSnapshotBody = chatFeedEl.querySelector('.snapshot-body');
+      if (nextSnapshotBody && shouldRestoreSnapshotScroll && previousSnapshotState) {
+        if (previousSnapshotState.nearBottom) {
+          nextSnapshotBody.scrollTop = nextSnapshotBody.scrollHeight;
+        } else {
+          const previousMax = Math.max(1, previousSnapshotState.height - previousSnapshotState.clientHeight);
+          const scrollRatio = previousSnapshotState.top / previousMax;
+          const nextMax = Math.max(0, nextSnapshotBody.scrollHeight - nextSnapshotBody.clientHeight);
+          nextSnapshotBody.scrollTop = Math.round(Math.max(0, Math.min(1, scrollRatio)) * nextMax);
+        }
+      }
+      chatStickToBottom = isChatNearBottom();
     }
 
     function renderChatSessionSelect() {
@@ -2595,6 +2977,7 @@ INDEX_HTML = """<!doctype html>
           renderWorkerList();
           loadPane();
           loadTodos();
+          closeChatSidebar();
         });
         conversationListEl.appendChild(button);
       });
@@ -2669,6 +3052,7 @@ INDEX_HTML = """<!doctype html>
           renderWorkerList();
           loadPane();
           loadTodos();
+          closeChatSidebar();
         });
         workerListEl.appendChild(button);
       });
@@ -3334,7 +3718,11 @@ INDEX_HTML = """<!doctype html>
 
     async function loadHistory() {
       const profile = currentProfileName();
-      const limit = Math.max(uiSettings.historyPageSize * Math.max(uiState.historyPage, 1), uiSettings.historyPageSize);
+      const limit = Math.max(
+        CHAT_HISTORY_FETCH_LIMIT,
+        uiSettings.historyPageSize * Math.max(uiState.historyPage, 1),
+        uiSettings.historyPageSize
+      );
       const data = await api(`/api/history?profile=${encodeURIComponent(profile)}&limit=${limit}`);
       historyCache = data.history || [];
       renderHistory();
@@ -3607,6 +3995,7 @@ INDEX_HTML = """<!doctype html>
       }
       templateNameInput.value = template.name || '';
       commandInput.value = template.command || '';
+      syncCommandInputHeight();
       templateScopeSelect.value = template.profile ? 'current' : '';
       setStatus(`Applied template ${template.name}.`);
     }
@@ -3618,6 +4007,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       commandInput.value = entry.command || '';
+      syncCommandInputHeight();
       setStatus('Applied recent command.');
     }
 
@@ -4000,6 +4390,7 @@ INDEX_HTML = """<!doctype html>
         return;
       }
       commandInput.value = todo.detail ? todo.detail : todo.title;
+      syncCommandInputHeight();
       setStatus('Todo content copied into command box.');
     }
 
@@ -4015,12 +4406,14 @@ INDEX_HTML = """<!doctype html>
         setStatus('Enter a command first.', 'error');
         return;
       }
+      chatStickToBottom = true;
       try {
         await api('/api/send', {
           method: 'POST',
           body: JSON.stringify({ profile, target, command, press_enter: true, expected_target: target }),
         });
         commandInput.value = '';
+        syncCommandInputHeight();
         await Promise.all([loadHistory(), loadPane()]);
         setStatus(`Sent command to ${target}.`);
       } catch (error) {
@@ -4028,11 +4421,13 @@ INDEX_HTML = """<!doctype html>
           const ok = window.confirm('This command looks dangerous. Send anyway?');
           if (ok) {
             try {
+              chatStickToBottom = true;
               await api('/api/send', {
                 method: 'POST',
                 body: JSON.stringify({ profile, target, command, press_enter: true, expected_target: target, confirm_risk: true }),
               });
               commandInput.value = '';
+              syncCommandInputHeight();
               await Promise.all([loadHistory(), loadPane()]);
               setStatus(`Sent command to ${target} with risk confirmation.`, 'warn');
               return;
@@ -4064,18 +4459,29 @@ INDEX_HTML = """<!doctype html>
       }
     }
 
-    function appendNewline() {
-      const value = commandInput.value;
-      commandInput.value = value.endsWith('\\n') ? value : `${value}\\n`;
-      commandInput.focus();
-    }
-
     async function copyTargetLabel() {
       try {
         await navigator.clipboard.writeText(currentTargetLabel());
         setStatus('Copied selected target label.');
       } catch (error) {
         setStatus('Clipboard is unavailable in this browser.', 'warn');
+      }
+    }
+
+    function toggleVoiceInput() {
+      if (!recognition) {
+        setStatus('Voice input is unavailable in this browser.', 'error');
+        return;
+      }
+      if (voiceListening) {
+        recognition.stop();
+        return;
+      }
+      try {
+        recognition.start();
+      } catch (error) {
+        const message = error && error.message ? error.message : 'Unable to start voice input.';
+        setStatus(message, 'error');
       }
     }
 
@@ -4086,20 +4492,36 @@ INDEX_HTML = """<!doctype html>
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = navigator.language || 'en-US';
+      recognition.onstart = () => {
+        voiceListening = true;
+        syncVoiceToggleUi();
+      };
+      recognition.onend = () => {
+        const wasListening = voiceListening;
+        voiceListening = false;
+        syncVoiceToggleUi();
+        if (wasListening) {
+          setStatus('Voice capture stopped.');
+        }
+      };
       recognition.onresult = (event) => {
         let transcript = '';
         for (let index = event.resultIndex; index < event.results.length; index += 1) {
           transcript += event.results[index][0].transcript;
         }
         commandInput.value = transcript.trim();
+        syncCommandInputHeight();
         setStatus('Listening… local speech-to-text is updating the command box.');
       };
       recognition.onerror = (event) => {
+        voiceListening = false;
+        syncVoiceToggleUi();
         setStatus(`Voice input error: ${event.error}`, 'error');
       };
     } else {
       setStatus('Voice input is unavailable in this browser. Use Chrome-based browsers or type commands manually.', 'warn');
     }
+    syncVoiceToggleUi();
 
     document.getElementById('refreshDashboard').addEventListener('click', refreshAll);
     document.getElementById('refreshState').addEventListener('click', loadSelectedProfile);
@@ -4135,22 +4557,51 @@ INDEX_HTML = """<!doctype html>
     document.getElementById('deleteTodoTemplate').addEventListener('click', deleteTodoTemplate);
     document.getElementById('sendCommand').addEventListener('click', sendCommand);
     document.getElementById('interrupt').addEventListener('click', interrupt);
-    document.getElementById('appendNewline').addEventListener('click', appendNewline);
     document.getElementById('copyTargetLabel').addEventListener('click', copyTargetLabel);
     document.getElementById('refreshPane').addEventListener('click', loadPane);
     document.getElementById('refreshChatPane').addEventListener('click', loadPane);
-    document.getElementById('startVoice').addEventListener('click', () => {
-      if (!recognition) {
-        setStatus('Voice input is unavailable in this browser.', 'error');
-        return;
-      }
-      recognition.start();
-      setStatus('Voice capture started.');
+    if (voiceToggleButton) {
+      voiceToggleButton.addEventListener('click', toggleVoiceInput);
+    }
+    if (commandInput) {
+      commandInput.addEventListener('input', syncCommandInputHeight);
+      commandInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+          event.preventDefault();
+          sendCommand();
+        }
+      });
+    }
+    if (chatFeedEl) {
+      chatFeedEl.addEventListener('scroll', () => {
+        chatStickToBottom = isChatNearBottom();
+        if (chatFeedEl.scrollTop <= CHAT_SCROLL_TOP_THRESHOLD) {
+          loadOlderChatHistory();
+        }
+      });
+    }
+    if (chatSidebarToggleEl) {
+      chatSidebarToggleEl.addEventListener('click', () => {
+        toggleChatSidebar();
+      });
+    }
+    if (chatSidebarCloseEl) {
+      chatSidebarCloseEl.addEventListener('click', () => {
+        closeChatSidebar(true);
+      });
+    }
+    if (chatSidebarScrimEl) {
+      chatSidebarScrimEl.addEventListener('click', () => {
+        closeChatSidebar(true);
+      });
+    }
+    window.addEventListener('resize', () => {
+      syncChatSidebarLayout();
     });
-    document.getElementById('stopVoice').addEventListener('click', () => {
-      if (!recognition) return;
-      recognition.stop();
-      setStatus('Voice capture stopped.');
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        closeChatSidebar(true);
+      }
     });
 
     tokenInput.addEventListener('change', refreshAll);
@@ -4168,6 +4619,7 @@ INDEX_HTML = """<!doctype html>
       renderWindows();
       loadPane();
       loadTodos();
+      closeChatSidebar();
     });
     sessionSelect.addEventListener('change', () => { uiState.historyPage = 1; uiState.todoPage = 1; renderWindows(); loadPane(); loadTodos(); });
     windowSelect.addEventListener('change', () => { uiState.historyPage = 1; uiState.todoPage = 1; renderPanes(); loadPane(); loadTodos(); });
@@ -4185,6 +4637,8 @@ INDEX_HTML = """<!doctype html>
 
     initializeFoldPanels();
     syncUiSettingsInputs();
+    syncChatSidebarLayout();
+    syncCommandInputHeight();
     setActiveView(uiState.currentView || serverActiveView || 'dashboard');
     refreshAll();
     setInterval(() => {

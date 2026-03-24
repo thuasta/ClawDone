@@ -145,8 +145,8 @@ class HtmlTests(unittest.TestCase):
         self.assertNotIn('href="/?view=dashboard"', INDEX_HTML)
 
     def test_chat_view_uses_chatbot_ui_style_layout(self) -> None:
-        self.assertIn('<section class="chatbot-layout">', INDEX_HTML)
-        self.assertIn('<aside class="chat-sidebar">', INDEX_HTML)
+        self.assertIn('<section class="chatbot-layout" id="chatLayout">', INDEX_HTML)
+        self.assertIn('<aside class="chat-sidebar" id="chatSidebar">', INDEX_HTML)
         self.assertIn('<section class="chat-main">', INDEX_HTML)
         self.assertIn('<h2>Work</h2>', INDEX_HTML)
         self.assertNotIn('Chatbot UI Inspired', INDEX_HTML)
@@ -164,7 +164,6 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("split(/\\n+/)", INDEX_HTML)
         self.assertIn("join('\\n')", INDEX_HTML)
         self.assertIn("split('\\n')", INDEX_HTML)
-        self.assertIn("endsWith('\\n')", INDEX_HTML)
 
 
 class ProfileStoreTests(unittest.TestCase):

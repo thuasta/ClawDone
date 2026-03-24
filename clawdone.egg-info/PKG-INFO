@@ -3,23 +3,26 @@ Name: clawdone
 Version: 0.2.0
 Summary: Mobile-friendly voice control for SSH/tmux-hosted coding agents
 Author: ClawDone Contributors
+License: MIT
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: paramiko<4,>=3.4
+Dynamic: license-file
 
 # ClawDone
 
-ClawDone 是一个面向手机端的多目标 SSH 控制台：
+![ClawDone logo](assets/logo.png)
 
-- 在手机上配置多个 SSH 目标
-- 连接到远程 Linux 服务器
-- 读取服务器上 `tmux` 里的 `session / window / pane`
-- 把 pane 当成独立的 Codex / vibe agent 线程管理
-- 给每个 agent pane 起本地 alias
-- 用手机浏览器本地语音转文字，把命令发送给对应 agent
-- 用一个面板同时管理多台机器上的多个 agent
+[简体中文](README.zh-CN.md)
 
-项目的核心链路是：
+ClawDone is a mobile-friendly control surface for coding agents running on remote Linux servers.
+
+It connects a phone browser to remote `tmux` panes over SSH, so you can inspect sessions, send commands, interrupt running work, review recent output, and track lightweight task state without opening a full laptop environment.
+
+## What It Does
+
+ClawDone is built around this flow:
 
 ```text
 Mobile Browser
@@ -27,65 +30,60 @@ Mobile Browser
   -> ClawDone service
   -> SSH
   -> remote tmux pane
-  -> Codex / vibe agent
+  -> coding agent
 ```
 
-## 前端风格声明
+In practice, it is designed for developers who:
 
-- `ClawDone` 内置 Web UI（`clawdone/html.py`）的视觉与交互样式参考了 `shadcn/ui` 的设计语言与组件规范。
-- 参考项目：`shadcn-ui/ui`：<https://github.com/shadcn-ui/ui>（数据快照：2026-03-19，110,077 stars）。
-- 当前实现保持“零前端构建依赖”（纯 HTML/CSS/JS），但采用了接近 `shadcn` 的 token、按钮变体、输入焦点态和卡片体系。
+- run Codex or other coding agents on remote machines
+- keep long-lived agents inside `tmux`
+- want to trigger or monitor work from a phone
+- need a clearer interface than raw SSH on mobile
 
-## 当前已实现功能
+## Current Capabilities
 
-### 多 SSH 目标控制
+### Remote target management
 
-- 保存多个 SSH Target
-- Target 字段包含：名称、分组、标签、收藏状态、主机、端口、用户名、密码、SSH key 路径、tmux 路径、备注
-- Dashboard 汇总所有目标的在线状态
-- 显示每个目标的 session / window / pane 数量
-- 支持收藏目标优先显示
-- 支持目标分组和标签
+- Save multiple SSH targets
+- Organize targets with groups, tags, favorites, and notes
+- Store per-target SSH options such as timeouts, retries, and host key policy
+- View aggregated dashboard status across targets
 
-### tmux / agent 管理
+### Remote tmux control
 
-- 远程列出 `tmux session / window / pane`
-- 把 `pane` 作为 agent 线程目标进行控制
-- 给目标 pane 保存本地 alias，例如 `backend-agent`
-- 查看目标 pane 最近输出
-- 向 pane 发送命令
-- 向 pane 发送 `Ctrl+C`
+- List remote `tmux` sessions, windows, and panes
+- Treat a pane as an agent endpoint
+- Assign a local alias to a pane such as `backend-agent`
+- Send commands to a pane
+- Send `Ctrl+C`
+- Capture recent pane output
 
-### 手机端输入体验
+### Mobile-oriented interaction
 
-- 浏览器本地语音转文字
-- 命令模板（全局或目标级）
-- 最近命令历史
-- 一键重用模板或历史命令
+- Built-in mobile web UI
+- Command templates and command history
+- Voice-to-text input in the browser
+- Faster switching between targets and panes
 
-### 部署 / 开发体验
+### Task and delivery primitives
 
-- `python -m clawdone serve` 启动服务
-- Docker 容器启动
-- `docker compose` 启动
-- Dev Container 已接入
-- 保留本地 tmux CLI 子命令，便于调试
+- Create todos for a specific target and pane
+- Track todo status such as `todo`, `in_progress`, `blocked`, `done`, and `verified`
+- Attach evidence to a task, such as output snippets or summaries
+- Record audit logs and task events
+- Create workflow triplets for planner / executor / reviewer patterns
 
-## 目录结构
+### Safety and access control
 
-- `clawdone/html.py:1`：手机端 Web UI
-- `clawdone/web.py:1`：HTTP API 与请求处理
-- `clawdone/store.py:1`：SSH Target、alias、模板、历史存储
-- `clawdone/remote.py:1`：SSH 执行与远程 tmux 控制
-- `clawdone/local_tmux.py:1`：本地 tmux CLI 辅助
-- `clawdone/cli.py:1`：CLI 入口
-- `tests/test_app.py:1`：单元测试与集成测试
-- `Dockerfile:1`：运行镜像与 devcontainer 基础镜像
-- `.devcontainer/devcontainer.json:1`：开发容器配置
+- Bearer-token protection for the web service
+- Optional role mapping for `admin`, `operator`, and `viewer`
+- Risk policy for dangerous commands: `allow`, `confirm`, or `deny`
+- SSH host key policies: `strict`, `accept-new`, and `insecure`
+- Read-only session sharing via scoped share tokens
 
-## 本地安装
+## Installation
 
-建议先安装为可编辑模式：
+ClawDone requires Python `3.11+`.
 
 ```bash
 python3 -m venv .venv
@@ -93,255 +91,171 @@ python3 -m venv .venv
 python -m pip install -e .
 ```
 
-这会安装 `paramiko`，用于服务端发起 SSH 连接。
+This installs `paramiko` for outbound SSH connections.
 
-## 启动服务
+## Quick Start
+
+Start the web service:
 
 ```bash
-python -m clawdone serve --host 0.0.0.0 --port 8787 --token your-secret
+python -m clawdone serve \
+  --host 0.0.0.0 \
+  --port 8787 \
+  --token your-secret
 ```
 
-也可以指定配置文件保存位置：
+Then open the service from your phone browser:
 
-```bash
-python -m clawdone serve --host 0.0.0.0 --port 8787 \
-  --token your-secret \
-  --store-path ~/.clawdone/profiles.json
+```text
+http://<server-ip>:8787
 ```
 
-推荐在生产环境显式设置 SSH 安全与稳定参数：
+A more explicit production-style example:
 
 ```bash
-python -m clawdone serve --host 0.0.0.0 --port 8787 \
+python -m clawdone serve \
+  --host 0.0.0.0 \
+  --port 8787 \
   --token your-secret \
+  --store-path ~/.clawdone/profiles.json \
   --host-key-policy strict \
   --ssh-timeout 10 \
   --ssh-command-timeout 15 \
   --ssh-retries 1 \
   --ssh-retry-backoff-ms 300 \
-  --dashboard-workers 8
+  --dashboard-workers 8 \
+  --risk-policy confirm
 ```
 
-启动后在手机浏览器打开：
+## Basic Usage
 
-```text
-http://<你的服务器IP>:8787
-```
+### 1. Add an SSH target
 
-## 手机端使用流程
+Create a target in the web UI with fields such as:
 
-### 1. 新建 SSH Target
+- name
+- host and port
+- username
+- password or SSH key path
+- `tmux` binary path
+- group, tags, description, favorite flag
+- optional SSH overrides
 
-在页面里填写：
+### 2. Inspect remote tmux state
 
-- Target 名称，例如 `gpu-box`
-- Group，例如 `work`
-- Tags，例如 `gpu, research`
-- Host，例如 `192.168.1.20`
-- Port，例如 `22`
-- Username，例如 `ubuntu`
-- Password，或者填写 SSH key path
-- tmux binary，默认 `tmux`
-- Host key policy（可选：继承服务默认 / strict / accept-new / insecure）
-- SSH timeout / retries（可选，0 代表继承服务默认）
-- Description，可选备注
-- Favorite，可选收藏
+After saving the target, ClawDone can load:
 
-点击 `Save target` 保存，点击 `Test SSH` 测试连通性。
+- sessions
+- windows
+- panes
 
-### 2. 查看 Dashboard
-
-首页会显示每个目标：
-
-- 在线 / 离线状态
-- session 数量
-- pane 数量
-- 分组、标签、备注
-- 收藏目标优先显示
-
-### 3. 选择 agent pane
-
-保存成功后，页面会自动拉取远程：
-
-- `tmux sessions`
-- `tmux windows`
-- `tmux panes`
-
-页面中：
-
-- `session` 对应 tmux 会话
-- `window` 对应 tmux 窗口
-- `pane` 对应具体 agent 线程
-
-例如：
+Example pane identifiers:
 
 - `codex:0.0`
 - `codex:1.0`
 - `research:2.1`
 
-你可以给选中的 pane 设置 alias，比如：
+### 3. Bind a pane to an agent alias
+
+Examples:
 
 - `backend-agent`
-- `frontend-codex`
+- `frontend-agent`
 - `release-bot`
 
-### 4. 使用模板和历史命令
+### 4. Send commands or interrupt work
 
-你可以：
-
-- 保存全局模板
-- 保存某个 target 专属模板
-- 复用最近发送过的命令
-
-### 5. 本地语音转文字并发送
-
-- 点击 `Start voice`
-- 手机浏览器本地完成语音转文字
-- 识别结果写入命令文本框
-- 点击 `Send to agent`
-
-ClawDone 会通过服务端 SSH 执行类似动作：
+ClawDone sends remote commands with `tmux send-keys`, for example:
 
 ```bash
-tmux send-keys -t codex:0.0 -l 'your command'
+tmux send-keys -t codex:0.0 -l 'run tests and summarize failures'
 tmux send-keys -t codex:0.0 Enter
 ```
 
-### 6. 中断或查看输出
+It can also send `Ctrl+C` and capture recent pane output.
 
-- `Send Ctrl+C`：向目标 pane 发送中断
-- `Refresh output`：查看最近 pane 输出
+### 5. Track tasks
 
-## 远程服务器准备
+You can create a todo for a specific target and pane, update its status, attach evidence, and review the result later from the mobile UI or API.
 
-在远程服务器上先运行你的 agent，例如：
+## CLI
 
-```bash
-tmux new -s codex
-codex
-```
+ClawDone keeps local tmux-oriented commands for debugging and scripting.
 
-如果你想在不同窗口 / pane 跑多个 agent，可以继续：
-
-```bash
-tmux new-window -t codex -n backend
-codex
-```
-
-或者在同一个窗口里拆 pane。
-
-## Docker 启动
-
-### 直接构建并运行
-
-```bash
-docker build -t clawdone .
-docker run --rm -p 8787:8787 \
-  -e CLAWDONE_TOKEN=your-secret \
-  -v clawdone-data:/data \
-  clawdone
-
-# 如果 Docker Hub 拉取慢，可以换基础镜像
-docker build -t clawdone \
-  --build-arg PYTHON_IMAGE=<your-python-base-image> \
-  .
-```
-
-默认行为：
-
-- 自动执行 `python -m clawdone serve`
-- 监听 `0.0.0.0:8787`
-- 将配置持久化到容器内 `/data/profiles.json`
-- 镜像已带 `HEALTHCHECK`
-
-### 使用 Compose
-
-```bash
-cp .env.example .env
-# 按需修改 CLAWDONE_TOKEN / CLAWDONE_PORT / PYTHON_IMAGE
-docker compose up --build -d
-```
-
-停止：
-
-```bash
-docker compose down
-```
-
-`.env.example:1` 提供了常用容器环境变量示例。
-
-## Dev Container
-
-仓库已经附带 `.devcontainer/devcontainer.json:1`，可直接在 VS Code / Cursor 里使用 `Reopen in Container`。
-
-Devcontainer 特点：
-
-- 复用项目根目录 `Dockerfile` 的 `devcontainer` target
-- 自动执行 `python -m pip install -e .`
-- 自动转发 `8787` 端口
-- 内置 `tmux`、`openssh-client`、`git`
-
-如果你想在容器里直接启动服务：
-
-```bash
-python -m clawdone serve --host 0.0.0.0 --port 8787 --token your-secret
-```
-
-## CLI 用法
-
-这些 CLI 子命令仍然针对 ClawDone 所在机器本地的 tmux，适合调试：
-
-### 列出本地 tmux 会话
+List local sessions:
 
 ```bash
 python -m clawdone list-sessions
 ```
 
-### 向本地 tmux 会话发命令
+Send a command to a local tmux session:
 
 ```bash
 python -m clawdone send --session codex --command "run tests"
 ```
 
-### 查看本地 tmux 输出
+Interrupt a local tmux session:
 
 ```bash
-python -m clawdone capture --session codex --lines 80
+python -m clawdone interrupt --session codex
 ```
 
-## 配置文件
+Capture recent output from a local tmux session:
 
-默认保存到：
+```bash
+python -m clawdone capture --session codex --lines 120
+```
+
+## Security Notes
+
+- Prefer `--host-key-policy strict` in real deployments.
+- Use `--token` or `--rbac-tokens-json` when exposing the service beyond localhost.
+- Keep SSH credentials and the profile store in a protected location.
+- Use `--risk-policy confirm` or `deny` if agents may receive destructive commands.
+
+## Project Layout
+
+- `clawdone/html.py` — embedded mobile web UI
+- `clawdone/web.py` — HTTP routes and request handling
+- `clawdone/store.py` — profiles, aliases, templates, todos, audit data
+- `clawdone/remote.py` — SSH execution and remote tmux inspection
+- `clawdone/local_tmux.py` — local tmux helper client
+- `clawdone/cli.py` — CLI entrypoints
+- `tests/test_app.py` — tests for storage, web API, and tmux behavior
+
+## Development
+
+Run tests:
+
+```bash
+python -m unittest tests.test_app
+```
+
+## GitHub Pages
+
+This repository now includes a static landing page under `docs/` and an automated deployment workflow at `.github/workflows/deploy-pages.yml`.
+
+Recommended setup for this repo:
+
+1. Commit and push the `docs/` directory to `main` or `master`.
+2. Open **Settings → Pages** in the GitHub repository.
+3. Set **Source** to **Deploy from a branch**.
+4. Select branch `main` and folder `/docs`.
+5. Save and wait for GitHub Pages to publish.
+
+Alternative setup:
+
+- Set **Source** to **GitHub Actions** and use `.github/workflows/deploy-pages.yml`.
+- Then push to `main` or `master`, or manually run the `deploy-pages` workflow.
+
+For the current repository, the project page is expected at:
 
 ```text
-~/.clawdone/profiles.json
+https://thuasta.github.io/ClawDone/
 ```
 
-其中会包含：
+Note that this is a **project site**, not a user site. Opening `https://thuasta.github.io/` may still show a 404 page, which is expected unless a separate user site exists there.
 
-- SSH Target 配置
-- pane alias 映射
-- 命令模板
-- 最近命令历史
+## Roadmap
 
-## 安全说明
-
-- 当前版本会把 SSH 密码保存在 ClawDone 服务器本地 JSON 文件中
-- 默认使用 `strict` Host Key 校验策略（依赖 `known_hosts`）
-- 可切换为 `accept-new`（首次信任并写入）或 `insecure`（不校验，不推荐）
-- 适合内网、自托管、受信机器
-- 更推荐用 SSH key，并把 ClawDone 放在 Tailscale / WireGuard / 局域网 / SSH 隧道后面
-- 如果开放到公网，请至少开启 `--token`，并最好再加 HTTPS 反向代理
-
-## 测试
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-## 下一步可继续扩展
-
-- WebSocket 实时日志流
-- 一键创建 tmux session / window / pane
-- 使用系统 Keychain / Secret Store 保存 SSH 密码
-- 更像聊天应用的流式对话界面
+See `ROADMAP.md` for the current project direction.
