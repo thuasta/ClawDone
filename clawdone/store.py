@@ -624,7 +624,7 @@ class ProfileStore:
             ]
         self._write(data)
 
-    def list_todos(self, profile_name: str = "", target: str = "", status: str = "") -> list[dict[str, Any]]:
+    def _list_todos_unlocked(self, profile_name: str = "", target: str = "", status: str = "") -> list[dict[str, Any]]:
         desired_status = str(status).strip().lower()
         if desired_status and desired_status not in TODO_STATUSES:
             allowed = ", ".join(sorted(TODO_STATUSES))
