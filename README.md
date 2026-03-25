@@ -58,6 +58,7 @@ In practice, it is designed for developers who:
 - Create todos for a specific target and pane
 - Track todo status such as `todo`, `in_progress`, `blocked`, `done`, and `verified`
 - Attach evidence to a task, such as output snippets or summaries
+- Clean older completed todos while keeping the latest completed items visible by default
 - Record audit logs and task events
 - Create workflow triplets for planner / executor / reviewer patterns
 
@@ -96,6 +97,12 @@ Then open the service from your phone browser:
 
 ```text
 http://<server-ip>:8787
+```
+
+If port `8787` is blocked or filtered in your LAN environment, switch to another port such as `8000`:
+
+```bash
+python -m clawdone serve --host 0.0.0.0 --port 8000 --token your-secret
 ```
 
 A more explicit production-style example:
@@ -166,6 +173,8 @@ It can also send `Ctrl+C` and capture recent pane output.
 
 You can create a todo for a specific target and pane, update its status, attach evidence, and review the result later from the mobile UI or API.
 
+The TODO view also supports a safer completed-task cleanup flow: by default, `Clear completed` removes only older `done` / `verified` items and keeps the latest `5` completed tasks visible.
+
 ## CLI
 
 ClawDone keeps local tmux-oriented commands for debugging and scripting.
@@ -219,6 +228,11 @@ Run tests:
 python -m unittest tests.test_app
 ```
 
+## Project Notes
+
+- `TODO.md` tracks the current roadmap and unfinished work.
+- `DONE.md` tracks completed capabilities and recently shipped changes.
+
 ## GitHub Pages
 
 This repository now includes a static landing page under `docs/` and an automated deployment workflow at `.github/workflows/deploy-pages.yml`.
@@ -246,4 +260,4 @@ Note that this is a **project site**, not a user site. Opening `https://thuasta.
 
 ## Roadmap
 
-See `ROADMAP.md` for the current project direction.
+See `TODO.md` for the current roadmap and `DONE.md` for completed work.

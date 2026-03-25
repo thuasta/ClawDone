@@ -58,6 +58,7 @@ Mobile Browser
 - 为指定 target 和 pane 创建 todo
 - 跟踪任务状态，例如 `todo`、`in_progress`、`blocked`、`done`、`verified`
 - 为任务附加证据，例如输出片段或摘要
+- 智能清理较旧的已完成任务，并默认保留最近完成项
 - 记录审计日志和任务事件
 - 支持 planner / executor / reviewer 形式的 workflow triplet
 
@@ -96,6 +97,12 @@ python -m clawdone serve \
 
 ```text
 http://<服务器IP>:8787
+```
+
+如果你的内网环境屏蔽了 `8787`，可以改用例如 `8000`：
+
+```bash
+python -m clawdone serve --host 0.0.0.0 --port 8000 --token your-secret
 ```
 
 更适合实际部署的示例：
@@ -166,6 +173,8 @@ tmux send-keys -t codex:0.0 Enter
 
 用户可以为指定 target 和 pane 创建 todo，更新状态，附加证据，并在后续通过移动端界面或 API 查看执行结果。
 
+TODO 页面还支持更安全的已完成任务清理：默认只清理较旧的 `done` / `verified` 项，并保留最近 `5` 条已完成任务，避免刚做完就被误删。
+
 ## CLI
 
 除了 Web 服务，ClawDone 也保留了面向本地 tmux 的 CLI，便于调试和脚本调用。
@@ -219,6 +228,11 @@ python -m clawdone capture --session codex --lines 120
 python -m unittest tests.test_app
 ```
 
+## 项目说明
+
+- `TODO.md` 用来记录当前路线图和未完成事项。
+- `DONE.md` 用来记录已经完成的能力和最近交付内容。
+
 ## GitHub Pages
 
 仓库已经新增 `docs/` 静态站点，以及自动部署工作流 `.github/workflows/deploy-pages.yml`。
@@ -246,4 +260,4 @@ https://thuasta.github.io/ClawDone/
 
 ## Roadmap
 
-项目后续方向见 `ROADMAP.md`。
+项目后续路线见 `TODO.md`，已完成能力见 `DONE.md`。

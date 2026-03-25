@@ -12,7 +12,7 @@ python -m pip install -e .
 python -m clawdone serve \
   --host 0.0.0.0 \
   --port 8000 \
-  --token your-secret
+  --token 1
 ```
 
 ## 2. 客户端（手机/浏览器）

@@ -1,4 +1,6 @@
-# 更好的用户交互
-## 能让用户在移动端能清楚知道在调用哪个agent 了解agent的进度
-## 用户能在移动端向agent发布代办事项
-## agent能够修改代办事项的完成状态并给出事项完成的确凿证据
+## 3.24
+### Claude
+#### 1、Add a "choose all button" for the taskbar.                                 
+#### 2、Manage all the timestamp with the code in                              
+https://github.com/frappe/gantt(Remember to add honor code to clarify         
+using the repo)00 

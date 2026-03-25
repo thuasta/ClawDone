@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import io
+from http import HTTPStatus
 import json
 import os
+import socket
 import tempfile
 import threading
 import time
@@ -27,7 +30,7 @@ from clawdone.app import (
 )
 from clawdone.html import INDEX_HTML
 from clawdone.supervisor import SupervisorClient, normalize_supervisor_config
-from clawdone.web import ClawDoneApp, render_index_html
+from clawdone.web import ClawDoneApp, build_handler, is_authorized, render_index_html
 
 SNAPSHOT_CMD = (
     "tmux list-sessions -F '#{session_name}\t#{session_windows}\t#{session_attached}' 2>/dev/null; "
@@ -130,18 +133,32 @@ class TmuxClientTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.send_keys("codex", "")
 
+    def test_capture_pane_uses_join_wrapped_lines(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(command: list[str], **_: object) -> DummyResult:
+            calls.append(command)
+            return DummyResult(stdout="ok\n")
+
+        client = TmuxClient(runner=runner)
+        self.assertEqual(client.capture_pane("codex:0.0", lines=80), "ok")
+        self.assertEqual(calls[0], ["tmux", "capture-pane", "-p", "-J", "-t", "codex:0.0", "-S", "-80"])
+
 
 class RenderIndexHtmlTests(unittest.TestCase):
-    def test_render_index_html_marks_requested_view_on_buttons(self) -> None:
+    def test_render_index_html_marks_requested_view(self) -> None:
         html = render_index_html('todo')
+        self.assertIn('data-view-button="todo"', html)
         self.assertIn('<div class="page-view active" id="view-todo">', html)
-        self.assertIn('<button class="tab-button active" type="button" data-view-button="todo">', html)
+        self.assertNotIn('class="tabbar"', html)
         self.assertNotIn('href="/?view=todo"', html)
 
 
 class HtmlTests(unittest.TestCase):
-    def test_tabbar_uses_buttons_without_navigation_href(self) -> None:
-        self.assertIn('<button class="tab-button active" type="button" data-view-button="dashboard">Home</button>', INDEX_HTML)
+    def test_index_html_omits_tabbar(self) -> None:
+        self.assertNotIn('class="tabbar"', INDEX_HTML)
+        self.assertIn('class="view-switcher"', INDEX_HTML)
+        self.assertIn('data-view-button="dashboard"', INDEX_HTML)
         self.assertNotIn('href="/?view=dashboard"', INDEX_HTML)
 
     def test_chat_view_uses_chatbot_ui_style_layout(self) -> None:
@@ -157,6 +174,7 @@ class HtmlTests(unittest.TestCase):
         self.assertIn('class="worker-avatar"', INDEX_HTML)
         self.assertIn('id="todoBoard" class="todo-board"', INDEX_HTML)
         self.assertIn('id="clearCompletedTodos"', INDEX_HTML)
+        self.assertIn('id="clearAllTodos"', INDEX_HTML)
         self.assertIn('Checklist', INDEX_HTML)
         self.assertNotIn('Choose profile → session → window → pane first.', INDEX_HTML)
 
@@ -165,6 +183,125 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("join('\\n')", INDEX_HTML)
         self.assertIn("split('\\n')", INDEX_HTML)
         self.assertIn("endsWith('\\n')", INDEX_HTML)
+
+    def test_runtime_js_uses_safe_click_binding_for_toolbar_actions(self) -> None:
+        self.assertIn("function bindClick(id, handler)", INDEX_HTML)
+        self.assertIn("bindClick('refreshDashboard', refreshAll);", INDEX_HTML)
+        self.assertIn("bindClick('clearAllTodos', clearAllTodos);", INDEX_HTML)
+
+    def test_runtime_js_syncs_ui_state_with_server(self) -> None:
+        self.assertIn("const UI_STATE_ENDPOINT = '/api/ui-state';", INDEX_HTML)
+        self.assertIn("await api('/api/ui-state/save'", INDEX_HTML)
+        self.assertIn("await api(UI_STATE_ENDPOINT)", INDEX_HTML)
+        self.assertIn("selected_profile: uiState.selectedProfile", INDEX_HTML)
+        self.assertIn("window.history.replaceState(null, '', nextUrl.toString());", INDEX_HTML)
+        self.assertIn("setStatus(`Opened ${safeView}.`);", INDEX_HTML)
+
+    def test_runtime_js_guards_local_storage_access_for_view_switch(self) -> None:
+        self.assertIn("function safeStorageGet(key, fallback = '')", INDEX_HTML)
+        self.assertIn("function safeStorageSet(key, value)", INDEX_HTML)
+        self.assertIn("safeStorageSet('clawdone-view', safeView);", INDEX_HTML)
+        self.assertIn("const PROFILE_SELECTION_STORAGE_KEY = 'clawdone-selected-profile';", INDEX_HTML)
+        self.assertIn("button.setAttribute('aria-current', 'page');", INDEX_HTML)
+
+    def test_runtime_js_keeps_auth_form_drafts_when_profile_is_unchanged(self) -> None:
+        self.assertIn("let profileFormDirty = false;", INDEX_HTML)
+        self.assertIn("function bindProfileFormDirtyTracking()", INDEX_HTML)
+        self.assertIn("if (!force && profileFormDirty && sourceName && sourceName === profileFormSourceName)", INDEX_HTML)
+        self.assertIn("const PROFILE_DRAFT_STORAGE_KEY = 'clawdone-profile-draft';", INDEX_HTML)
+        self.assertIn("function applyStoredProfileDraft()", INDEX_HTML)
+        self.assertIn("function syncProfileDraftLifecycle()", INDEX_HTML)
+        self.assertIn("window.addEventListener('pagehide', () => {", INDEX_HTML)
+        self.assertIn("window.addEventListener('pageshow', () => {", INDEX_HTML)
+        self.assertIn("document.addEventListener('visibilitychange', () => {", INDEX_HTML)
+
+    def test_runtime_js_animates_page_view_switches(self) -> None:
+        self.assertIn(".page-view.view-entering { animation: page-view-enter 160ms ease-out; }", INDEX_HTML)
+        self.assertIn("activeViewEl.classList.add('view-entering');", INDEX_HTML)
+
+    def test_runtime_js_keeps_supervisor_drafts_when_profile_is_unchanged(self) -> None:
+        self.assertIn("let supervisorFormDirty = false;", INDEX_HTML)
+        self.assertIn("function bindSupervisorFormDirtyTracking()", INDEX_HTML)
+        self.assertIn("if (!force && supervisorFormDirty && sourceProfile && sourceProfile === supervisorFormSourceProfile)", INDEX_HTML)
+
+    def test_selected_task_panel_stays_minimal(self) -> None:
+        self.assertIn("const visibleTodos = allTodos.filter((todo) => !['done', 'verified'].includes(String(todo.status || '').toLowerCase()));", INDEX_HTML)
+        self.assertIn("No active tasks. Delivery keeps accepted results.", INDEX_HTML)
+        self.assertIn("No active tasks to display.", INDEX_HTML)
+        self.assertNotIn("Send checklist to current agent", INDEX_HTML)
+        self.assertNotIn("<h2>Selected task</h2>", INDEX_HTML)
+        self.assertNotIn("Task editing, status updates, and evidence are handled by the agent.", INDEX_HTML)
+        self.assertNotIn("Use the checklist on the left and the delivery page for review details.", INDEX_HTML)
+        self.assertNotIn('placeholder="Override the title if needed"', INDEX_HTML)
+        self.assertIn('id="todoEvidenceList"', INDEX_HTML)
+        self.assertIn('id="auditSelect"', INDEX_HTML)
+
+    def test_empty_task_state_refreshes_gantt(self) -> None:
+        self.assertIn("todoBoardEl.innerHTML = '<div class=\"empty-state\">No checklist items yet.</div>';", INDEX_HTML)
+        self.assertIn("renderGanttChart();", INDEX_HTML)
+        self.assertNotIn('placeholder="Bugfix task template"', INDEX_HTML)
+
+class WebResponseTests(unittest.TestCase):
+    def test_json_response_ignores_broken_pipe(self) -> None:
+        class BrokenPipeWriter:
+            def write(self, data: bytes) -> int:
+                _ = data
+                raise BrokenPipeError(32, 'Broken pipe')
+
+        class StubHandler:
+            def __init__(self) -> None:
+                self.wfile = BrokenPipeWriter()
+
+            def send_response(self, status: int) -> None:
+                self.status = status
+
+            def send_header(self, name: str, value: str) -> None:
+                _ = (name, value)
+
+            def end_headers(self) -> None:
+                return None
+
+        app = ClawDoneApp({"store_path": ":memory:", "todo_autopilot": False})
+        app.json_response(StubHandler(), HTTPStatus.OK, {"ok": True})
+
+    def test_do_get_ignores_client_disconnect_during_error_response(self) -> None:
+        app = ClawDoneApp({"store_path": ":memory:", "todo_autopilot": False})
+
+        class BrokenPipeWriter:
+            def write(self, data: bytes) -> int:
+                _ = data
+                raise BrokenPipeError(32, 'Broken pipe')
+
+        handler_cls = build_handler(app)
+
+        class StubHandler(handler_cls):
+            def __init__(self) -> None:
+                self.wfile = BrokenPipeWriter()
+                self.rfile = io.BytesIO()
+                self.headers = {}
+                self.path = '/api/todo-templates?profile=office&target=codex%3A0.0'
+                self.request_version = 'HTTP/1.1'
+                self.command = 'GET'
+                self.requestline = 'GET /api/todo-templates?profile=office&target=codex%3A0.0 HTTP/1.1'
+                self.server = None
+                self.client_address = ('127.0.0.1', 0)
+
+            def send_response(self, status: int, message: str | None = None) -> None:
+                _ = (status, message)
+
+            def send_header(self, name: str, value: str) -> None:
+                _ = (name, value)
+
+            def end_headers(self) -> None:
+                raise BrokenPipeError(32, 'Broken pipe')
+
+        original = app.handle_get
+        app.handle_get = lambda handler: (_ for _ in ()).throw(RuntimeError('boom'))
+        try:
+            StubHandler().do_GET()
+        finally:
+            app.handle_get = original
+
 
 
 class ProfileStoreTests(unittest.TestCase):
@@ -202,6 +339,30 @@ class ProfileStoreTests(unittest.TestCase):
             self.assertEqual(store.list_templates("office"), [])
             store.clear_history("office")
             self.assertEqual(store.list_history("office", limit=10), [])
+
+    def test_ui_state_persists_across_store_reloads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "profiles.json"
+            store = ProfileStore(store_path)
+            saved = store.save_ui_state(
+                {
+                    "ui_settings": {"paneLines": 999, "targetPageSize": 7, "historyPageSize": 9, "todoPageSize": 8},
+                    "current_view": "chat",
+                    "selected_profile": "office",
+                    "fold_states": {"dashboard-targets": "closed", "todo-list": "open"},
+                }
+            )
+            self.assertEqual(saved["ui_settings"]["paneLines"], 200)
+            self.assertEqual(saved["current_view"], "chat")
+            self.assertEqual(saved["selected_profile"], "office")
+            self.assertEqual(saved["fold_states"]["dashboard-targets"], "closed")
+
+            reloaded = ProfileStore(store_path).get_ui_state()
+            self.assertEqual(reloaded["ui_settings"]["paneLines"], 200)
+            self.assertEqual(reloaded["ui_settings"]["targetPageSize"], 7)
+            self.assertEqual(reloaded["current_view"], "chat")
+            self.assertEqual(reloaded["selected_profile"], "office")
+            self.assertEqual(reloaded["fold_states"]["todo-list"], "open")
 
     def test_delete_profile_removes_related_records(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -511,6 +672,28 @@ class ProfileStoreTests(unittest.TestCase):
             updated = store.get_todo(todo["id"])
             self.assertEqual(updated["status"], "done")
             self.assertEqual(updated["progress_note"], "wrapped report applied")
+
+    def test_app_ingests_report_with_literal_newlines_inside_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=FakeSSHExecutor()),
+            )
+            todo = store.save_todo({"title": "Wrap report strings", "profile": "office", "target": "codex:0.0"})
+            store.update_todo_status(todo["id"], "in_progress", actor="autopilot")
+
+            wrapped_report = """CLAWDONE_REPORT {"todo_id":"%s","status":"done","progress
+  _note":"line one
+line two","evidence":[{"type":"summary","content":"verified
+from wrapped output"}]}""" % todo["id"]
+            applied = app.process_pane_reports("office", "codex:0.0", wrapped_report)
+            self.assertEqual(len(applied), 1)
+            updated = store.get_todo(todo["id"])
+            self.assertEqual(updated["status"], "done")
+            self.assertEqual(updated["progress_note"], "line one\nline two")
 
     def test_auto_dispatch_todo_does_not_double_send_under_race(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -881,6 +1064,39 @@ class AuthTests(unittest.TestCase):
         handler = DummyHandler(path="/api/sessions?token=query-secret")
         self.assertEqual(extract_token(handler), "query-secret")
 
+    def test_authorized_when_tokens_match(self) -> None:
+        handler = DummyHandler(auth="Bearer secret")
+        self.assertTrue(is_authorized(handler, {"token": "secret"}))
+
+    def test_unauthorized_when_tokens_do_not_match(self) -> None:
+        handler = DummyHandler(header_token="wrong")
+        self.assertFalse(is_authorized(handler, {"token": "secret"}))
+
+
+class ChecklistParsingTests(unittest.TestCase):
+    def test_parse_checklist_text_filters_noise_lines(self) -> None:
+        app = ClawDoneApp({"store_path": ":memory:", "todo_autopilot": False})
+        parsed = app.parse_checklist_text(
+            """Tasks
+medium
+Tasks
+- Fix login 500 error
+- Add a regression test
+- Summarize the changes
+Save checklist
+Send checklist to current agent
+Refresh checklist
+Clear completed
+Clear all tasks
+Select all
+"""
+        )
+        self.assertEqual(
+            [item["title"] for item in parsed],
+            ["Fix login 500 error", "Add a regression test", "Summarize the changes"],
+        )
+
+
 class NormalizationTests(unittest.TestCase):
     def test_normalize_profile_and_mask_profile(self) -> None:
         profile = normalize_profile({"name": "office", "host": "1.1.1.1", "username": "ubuntu", "tags": "gpu, gpu, work", "favorite": 1, "password": "secret"})
@@ -953,6 +1169,25 @@ class ParserTests(unittest.TestCase):
 
 
 class WebIntegrationTests(unittest.TestCase):
+    def test_create_server_port_conflict_raises_clean_oserror(self) -> None:
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen(1)
+        host, port = blocker.getsockname()
+        try:
+            with self.assertRaises(OSError) as ctx:
+                create_server(
+                    {
+                        "host": host,
+                        "port": port,
+                        "store_path": ":memory:",
+                        "todo_autopilot": False,
+                    }
+                )
+            self.assertIn("Address already in use", str(ctx.exception))
+        finally:
+            blocker.close()
+
     def _request_json(
         self,
         url: str,
@@ -1012,7 +1247,9 @@ class WebIntegrationTests(unittest.TestCase):
                         windows="codex\t0\tmain\t1",
                         panes="codex\t0\tmain\t0\t\tcodex\t1",
                     ),
-                    ("office", "tmux capture-pane -p -t codex:0.0 -S -120"): command_result(0, "ready"),
+                    ("office", "tmux capture-pane -p -J -t codex:0.0 -S -120"): command_result(0, "ready"),
+                    ("office", "tmux capture-pane -p -J -t codex:0.0 -S -200"): command_result(0, "clamped-max"),
+                    ("office", "tmux capture-pane -p -J -t codex:0.0 -S -20"): command_result(0, "clamped-min"),
                     ("office", "tmux send-keys -t codex:0.0 -l 'fix auth and run tests'"): command_result(0),
                     ("office", "tmux send-keys -t codex:0.0 Enter"): command_result(0),
                 },
@@ -1035,6 +1272,27 @@ class WebIntegrationTests(unittest.TestCase):
                 dashboard = self._request_json("http://127.0.0.1:8893/api/dashboard", "secret")
                 self.assertEqual(dashboard["profile_count"], 2)
                 self.assertEqual(dashboard["online_count"], 1)
+
+                ui_state = self._request_json("http://127.0.0.1:8893/api/ui-state", "secret")
+                self.assertIn("ui_state", ui_state)
+                saved_ui_state = self._request_json(
+                    "http://127.0.0.1:8893/api/ui-state/save",
+                    "secret",
+                    method="POST",
+                    body={
+                        "ui_settings": {"paneLines": 180, "targetPageSize": 7, "historyPageSize": 9, "todoPageSize": 5},
+                        "current_view": "todo",
+                        "selected_profile": "office",
+                        "fold_states": {"dashboard-targets": "closed", "todo-list": "open"},
+                    },
+                )
+                self.assertEqual(saved_ui_state["ui_state"]["current_view"], "todo")
+                self.assertEqual(saved_ui_state["ui_state"]["selected_profile"], "office")
+                self.assertEqual(saved_ui_state["ui_state"]["ui_settings"]["paneLines"], 180)
+                reloaded_ui_state = self._request_json("http://127.0.0.1:8893/api/ui-state", "secret")
+                self.assertEqual(reloaded_ui_state["ui_state"]["current_view"], "todo")
+                self.assertEqual(reloaded_ui_state["ui_state"]["selected_profile"], "office")
+                self.assertEqual(reloaded_ui_state["ui_state"]["fold_states"]["dashboard-targets"], "closed")
 
                 templates = self._request_json("http://127.0.0.1:8893/api/templates?profile=office", "secret")
                 self.assertEqual(templates["templates"][0]["name"], "Summarize")
@@ -1061,6 +1319,16 @@ class WebIntegrationTests(unittest.TestCase):
 
                 pane = self._request_json("http://127.0.0.1:8893/api/pane?profile=office&target=codex%3A0.0", "secret")
                 self.assertEqual(pane["output"], "ready")
+                pane_clamped_max = self._request_json(
+                    "http://127.0.0.1:8893/api/pane?profile=office&target=codex%3A0.0&lines=9999",
+                    "secret",
+                )
+                self.assertEqual(pane_clamped_max["output"], "clamped-max")
+                pane_clamped_min = self._request_json(
+                    "http://127.0.0.1:8893/api/pane?profile=office&target=codex%3A0.0&lines=1",
+                    "secret",
+                )
+                self.assertEqual(pane_clamped_min["output"], "clamped-min")
 
                 created_todo = self._request_json(
                     "http://127.0.0.1:8893/api/todos",
@@ -1082,6 +1350,60 @@ class WebIntegrationTests(unittest.TestCase):
                     "secret",
                 )
                 self.assertEqual(todos["todos"][0]["id"], todo_id)
+                self.assertEqual(
+                    self._request_error_status(
+                        "http://127.0.0.1:8893/api/todos/status",
+                        "secret",
+                        method="POST",
+                        body={"todo_id": todo_id, "status": "in_progress", "progress_note": "running tests", "actor": "mobile-user"},
+                    ),
+                    400,
+                )
+                self.assertEqual(
+                    self._request_error_status(
+                        "http://127.0.0.1:8893/api/todos/evidence",
+                        "secret",
+                        method="POST",
+                        body={"todo_id": todo_id, "evidence": {"type": "summary", "content": "manual note"}, "actor": "mobile-user"},
+                    ),
+                    400,
+                )
+                self.assertEqual(
+                    self._request_error_status(
+                        "http://127.0.0.1:8893/api/todos/report",
+                        "secret",
+                        method="POST",
+                        body={"todo_id": todo_id, "status": "done", "progress_note": "manual completion", "actor": "mobile-user"},
+                    ),
+                    400,
+                )
+                self.assertEqual(
+                    self._request_error_status(
+                        "http://127.0.0.1:8893/api/supervisor/dispatch",
+                        "secret",
+                        method="POST",
+                        body={"todo_id": todo_id},
+                    ),
+                    400,
+                )
+                self.assertEqual(
+                    self._request_error_status(
+                        "http://127.0.0.1:8893/api/supervisor/review",
+                        "secret",
+                        method="POST",
+                        body={"todo_id": todo_id},
+                    ),
+                    400,
+                )
+                self.assertEqual(
+                    self._request_error_status(
+                        "http://127.0.0.1:8893/api/supervisor/accept",
+                        "secret",
+                        method="POST",
+                        body={"todo_id": todo_id},
+                    ),
+                    400,
+                )
 
                 status_update = self._request_json(
                     "http://127.0.0.1:8893/api/todos/status",
@@ -1167,7 +1489,7 @@ class WebIntegrationTests(unittest.TestCase):
             store.set_alias("office", "codex:0.0", "backend")
             executor = FakeSSHExecutor(
                 responses={
-                    ("office", "tmux capture-pane -p -t codex:0.0 -S -120"): command_result(0, "ready"),
+                    ("office", "tmux capture-pane -p -J -t codex:0.0 -S -120"): command_result(0, "ready"),
                 }
             )
             server = create_server(
@@ -1300,6 +1622,399 @@ class WebIntegrationTests(unittest.TestCase):
             finally:
                 server.shutdown()
                 server.server_close()
+
+    def test_checklist_push_batches_noisy_text_and_auto_dispatches_todos(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "profiles.json"
+            store = ProfileStore(store_path)
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            store.save_todo({"title": "Unrelated old task", "profile": "office", "target": "codex:0.0"})
+            executor = FakeSSHExecutor()
+            server = create_server(
+                {"host": "127.0.0.1", "port": 8895, "token": "secret", "store_path": str(store_path), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=executor),
+            )
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            time.sleep(0.2)
+            try:
+                result = self._request_json(
+                    "http://127.0.0.1:8895/api/checklist/push",
+                    "secret",
+                    method="POST",
+                    body={
+                        "profile": "office",
+                        "target": "codex:0.0",
+                        "raw_text": """Tasks
+medium
+Tasks
+- Fix login 500 error
+- Add a regression test
+- Summarize the changes
+Save checklist
+Send checklist to current agent
+Refresh checklist
+Clear completed
+Clear all tasks
+Select all
+""",
+                        "dispatch": True,
+                    },
+                )
+                self.assertEqual(result["parsed_count"], 3)
+                self.assertEqual(len(result["created"]), 3)
+                self.assertEqual(result["skipped"], 0)
+                self.assertTrue(result["dispatch"]["queued"])
+                self.assertEqual(result["dispatch"]["count"], 3)
+                self.assertEqual(result["dispatch"]["attempted_count"], 3)
+
+                time.sleep(0.2)
+                todos = store.list_todos(profile_name="office", target="codex:0.0")
+                self.assertEqual(len(todos), 4)
+                titles = {todo["title"] for todo in todos}
+                self.assertIn("Unrelated old task", titles)
+                self.assertIn("Fix login 500 error", titles)
+                self.assertNotIn("Save checklist", titles)
+                status_by_title = {todo["title"]: todo["status"] for todo in todos}
+                self.assertEqual(status_by_title["Unrelated old task"], "todo")
+                self.assertEqual(status_by_title["Fix login 500 error"], "in_progress")
+                self.assertEqual(status_by_title["Add a regression test"], "in_progress")
+                self.assertEqual(status_by_title["Summarize the changes"], "in_progress")
+                send_commands = [command for _, command in executor.commands if "send-keys" in command and " -l " in command]
+                self.assertEqual(len(send_commands), 3)
+                sent_text = "\n".join(send_commands)
+                self.assertIn("Fix login 500 error", sent_text)
+                self.assertIn("Add a regression test", sent_text)
+                self.assertIn("Summarize the changes", sent_text)
+                self.assertNotIn("Unrelated old task", sent_text)
+                self.assertNotIn("Save checklist", sent_text)
+                self.assertIn("CLAWDONE_REPORT", sent_text)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+
+class AgentRuntimeTests(unittest.TestCase):
+    def test_ssh_tmux_runtime_send_command(self) -> None:
+        from clawdone.runtime import SshTmuxRuntime
+
+        sent: list[tuple] = []
+
+        class FakeRemoteTmux:
+            def send_keys(self, profile: dict, target: str, command: str, press_enter: bool) -> None:
+                sent.append((target, command, press_enter))
+
+        runtime = SshTmuxRuntime(profile={"name": "office"}, remote_tmux=FakeRemoteTmux())
+        asyncio.run(runtime.send_command("codex:0.0", "echo hi"))
+        self.assertEqual(sent, [("codex:0.0", "echo hi", True)])
+
+    def test_ssh_tmux_runtime_capture_output(self) -> None:
+        from clawdone.runtime import SshTmuxRuntime
+
+        class FakeRemoteTmux:
+            def capture_pane(self, profile: dict, target: str, lines: int) -> str:
+                return f"output from {target}"
+
+        runtime = SshTmuxRuntime(profile={"name": "office"}, remote_tmux=FakeRemoteTmux())
+        result = asyncio.run(runtime.capture_output("codex:0.0", lines=50))
+        self.assertEqual(result, "output from codex:0.0")
+
+    def test_mcp_runtime_test_connection_failure(self) -> None:
+        from clawdone.runtime import McpRuntime
+
+        runtime = McpRuntime(mcp_url="http://127.0.0.1:1", timeout=1.0)
+        result = asyncio.run(runtime.test_connection())
+        self.assertFalse(result["ok"])
+        self.assertIn("error", result)
+
+
+class AsyncDispatchTests(unittest.TestCase):
+    def test_async_dispatch_does_not_double_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+
+            class SlowExecutor(FakeSSHExecutor):
+                def run(self, profile: dict, command: str) -> dict:
+                    if "send-keys" in command and " -l " in command:
+                        time.sleep(0.05)
+                    return super().run(profile, command)
+
+            executor = SlowExecutor()
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False, "dispatch_concurrency": 4},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=executor),
+            )
+            todo = store.save_todo({"title": "Async race dispatch", "profile": "office", "target": "codex:0.0"})
+
+            # Dispatch the same todo concurrently from multiple threads
+            threads = [threading.Thread(target=app.auto_dispatch_todo, args=(todo["id"],)) for _ in range(3)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            sent = [cmd for _, cmd in executor.commands if "send-keys" in cmd and " -l " in cmd]
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(store.get_todo(todo["id"])["status"], "in_progress")
+
+    def test_auto_dispatch_ready_todos_async_concurrent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            executor = FakeSSHExecutor()
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False, "dispatch_concurrency": 4},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=executor),
+            )
+            for i in range(3):
+                store.save_todo({"title": f"Task {i}", "profile": "office", "target": f"codex:0.{i}"})
+
+            dispatched = app.auto_dispatch_ready_todos(profile_name="office")
+            self.assertEqual(len(dispatched), 3)
+            for todo in store.list_todos(profile_name="office"):
+                self.assertEqual(todo["status"], "in_progress")
+
+
+class AsyncReportProcessingTests(unittest.TestCase):
+    def test_process_active_todo_reports_async(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+
+            todo = store.save_todo({"title": "Async report", "profile": "office", "target": "codex:0.0"})
+            store.update_todo_status(todo["id"], "in_progress", actor="autopilot")
+
+            report_json = json.dumps({
+                "todo_id": todo["id"],
+                "status": "done",
+                "progress_note": "async report processed",
+                "evidence": [{"type": "summary", "content": "verified"}],
+            })
+
+            class ReportExecutor(FakeSSHExecutor):
+                def run(self, profile: dict, command: str) -> dict:
+                    if "capture-pane" in command:
+                        return command_result(0, f"CLAWDONE_REPORT {report_json}\n")
+                    return super().run(profile, command)
+
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=ReportExecutor()),
+            )
+            applied = app.process_active_todo_reports()
+            self.assertEqual(len(applied), 1)
+            self.assertEqual(store.get_todo(todo["id"])["status"], "done")
+
+    def test_process_active_todo_reports_infers_checked_completion_and_auto_verifies(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = ProfileStore(Path(temp_dir) / "profiles.json")
+            store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            store.save_supervisor_config(
+                {
+                    "name": "Supervisor",
+                    "profile": "office",
+                    "api_key": "sk-test",
+                    "auto_dispatch": False,
+                    "auto_review": True,
+                    "auto_accept": True,
+                }
+            )
+
+            todo = store.save_todo({"title": "Del the cardbar of", "profile": "office", "target": "codex:0.0"})
+            store.update_todo_status(todo["id"], "in_progress", actor="autopilot")
+
+            pane_output = """- [x] Del the cardbar of
+
+I removed the bottom card/tab bar from clawdone/html/body.py and deleted the related tabbar CSS in clawdone/html/styles.py.
+The page-view state logic in JS is still intact, so direct view rendering and stored view state still work without the bottom nav.
+"""
+
+            class ReportExecutor(FakeSSHExecutor):
+                def run(self, profile: dict, command: str) -> dict:
+                    if "capture-pane" in command:
+                        return command_result(0, pane_output)
+                    return super().run(profile, command)
+
+            app = ClawDoneApp(
+                {"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False},
+                store=store,
+                remote_tmux=RemoteTmuxClient(executor=ReportExecutor()),
+            )
+            app.supervisor_client = SupervisorClient(
+                transport=FakeSupervisorTransport(
+                    responses=[
+                        {
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": json.dumps(
+                                            {
+                                                "verdict": "accept",
+                                                "summary": "delivery verified by supervisor",
+                                                "required_fixes": [],
+                                                "evidence": [{"type": "summary", "content": "supervisor accepted the delivery"}],
+                                            }
+                                        )
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                )
+            )
+
+            applied = app.process_active_todo_reports()
+            self.assertEqual(len(applied), 1)
+            updated = store.get_todo(todo["id"])
+            self.assertEqual(updated["status"], "verified")
+            self.assertEqual(updated["progress_note"], "delivery verified by supervisor")
+            self.assertTrue(any("I removed the bottom card/tab bar" in str(item.get("content", "")) for item in updated.get("evidence", [])))
+            actions = {
+                entry["action"]
+                for entry in store.list_audit_logs(profile_name="office", target="codex:0.0", limit=20)
+                if entry.get("todo_id") == todo["id"]
+            }
+            self.assertIn("supervisor.auto_review", actions)
+            self.assertIn("supervisor.auto_accept", actions)
+
+
+class PerUserIsolationTests(unittest.TestCase):
+    def test_user_hash_returns_8_hex_chars(self) -> None:
+        h = ClawDoneApp._user_hash("mytoken")
+        self.assertEqual(len(h), 8)
+        self.assertTrue(all(c in "0123456789abcdef" for c in h))
+
+    def test_user_store_path_is_under_users_subdir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "profiles.json"
+            app = ClawDoneApp({"store_path": str(store_path), "token": "tok", "todo_autopilot": False})
+            path = app._user_store_path("abcd1234")
+            self.assertEqual(path.parent.name, "users")
+            self.assertEqual(path.name, "abcd1234.json")
+
+    def test_open_mode_returns_401_with_token_required_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "profiles.json"
+            app = ClawDoneApp({"store_path": str(store_path), "todo_autopilot": False})
+
+            class FakeWriter:
+                def __init__(self) -> None:
+                    self.data = b""
+                def write(self, d: bytes) -> None:
+                    self.data += d
+
+            class FakeHandler:
+                def __init__(self) -> None:
+                    self.path = "/api/health"
+                    self.headers: dict[str, str] = {}
+                    self.rfile = io.BytesIO()
+                    self.wfile = FakeWriter()
+                    self._status: int = 0
+                    self._sent_headers: list[tuple[str, str]] = []
+                def send_response(self, status: int, message: str | None = None) -> None:
+                    self._status = status
+                def send_header(self, name: str, value: str) -> None:
+                    self._sent_headers.append((name, value))
+                def end_headers(self) -> None:
+                    pass
+
+            handler = FakeHandler()
+            result = app.require_auth(handler)
+            self.assertFalse(result)
+            self.assertEqual(handler._status, 401)
+            body = json.loads(handler.wfile.data.decode("utf-8"))
+            self.assertIn("token required", body["error"])
+
+    def test_two_rbac_tokens_get_separate_stores(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "profiles.json"
+            app = ClawDoneApp({
+                "store_path": str(store_path),
+                "rbac_tokens": {"token-a": "admin", "token-b": "admin"},
+                "todo_autopilot": False,
+            })
+            hash_a = app._user_hash("token-a")
+            hash_b = app._user_hash("token-b")
+            store_a = app._get_or_create_user_store(hash_a)
+            store_b = app._get_or_create_user_store(hash_b)
+            self.assertIsNot(store_a, store_b)
+            self.assertNotEqual(str(store_a.path), str(store_b.path))
+
+    def test_migration_copies_existing_store_to_each_user(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "profiles.json"
+            # create a pre-existing store with data
+            existing = ProfileStore(store_path)
+            existing.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+
+            app = ClawDoneApp({
+                "store_path": str(store_path),
+                "rbac_tokens": {"token-a": "admin", "token-b": "admin"},
+                "todo_autopilot": False,
+            })
+            users_dir = store_path.parent / "users"
+            self.assertTrue(users_dir.is_dir())
+            hash_a = app._user_hash("token-a")
+            hash_b = app._user_hash("token-b")
+            self.assertTrue((users_dir / f"{hash_a}.json").exists())
+            self.assertTrue((users_dir / f"{hash_b}.json").exists())
+            # each user's store should have the migrated profile
+            store_a = app._get_or_create_user_store(hash_a)
+            self.assertEqual(len(store_a.list_profiles()), 1)
+
+    def test_migration_skipped_when_users_dir_already_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "profiles.json"
+            existing = ProfileStore(store_path)
+            existing.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            # pre-create users dir to simulate already-migrated state
+            users_dir = store_path.parent / "users"
+            users_dir.mkdir()
+
+            app = ClawDoneApp({
+                "store_path": str(store_path),
+                "rbac_tokens": {"token-a": "admin"},
+                "todo_autopilot": False,
+            })
+            # no files should have been created inside users/
+            self.assertEqual(list(users_dir.glob("*.json")), [])
+
+    def test_per_user_report_keys_are_isolated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_a = ProfileStore(Path(temp_dir) / "a.json")
+            store_b = ProfileStore(Path(temp_dir) / "b.json")
+            app = ClawDoneApp({"store_path": str(Path(temp_dir) / "profiles.json"), "todo_autopilot": False}, store=store_a)
+            keys_a = app._report_keys_for_store(store_a)
+            keys_b = app._report_keys_for_store(store_b)
+            keys_a.add("key1")
+            self.assertIn("key1", keys_a)
+            self.assertNotIn("key1", keys_b)
+
+    def test_share_token_resolves_to_owner_store_via_owner_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store_path = Path(temp_dir) / "profiles.json"
+            app = ClawDoneApp({
+                "store_path": str(store_path),
+                "rbac_tokens": {"token-a": "admin"},
+                "todo_autopilot": False,
+            })
+            token_hash = app._user_hash("token-a")
+            user_store = app._get_or_create_user_store(token_hash)
+            user_store.save_profile({"name": "office", "host": "10.0.0.1", "username": "ubuntu"})
+            share = user_store.create_session_share({
+                "profile": "office",
+                "target": "codex:0.0",
+                "permission": "read",
+                "owner_hash": token_hash,
+            })
+            identity = {"auth": "share", "token": share["token"], "role": "viewer", "share": share}
+            resolved = app._resolve_user_store(identity)
+            self.assertEqual(str(resolved.path), str(user_store.path))
 
 
 if __name__ == "__main__":

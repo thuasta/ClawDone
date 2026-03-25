@@ -25,18 +25,42 @@ const translations = {
 
 const languageButtons = document.querySelectorAll('[data-lang]');
 const translatableNodes = document.querySelectorAll('[data-i18n]');
+const heroTitleNode = document.querySelector('[data-i18n="heroTitle"]');
+const heroTextNode = document.querySelector('[data-i18n="heroText"]');
+const searchParams = new URLSearchParams(window.location.search);
+
+function getOverrides() {
+  return {
+    title: searchParams.get('title')?.trim(),
+    headline: searchParams.get('headline')?.trim(),
+    tagline: searchParams.get('tagline')?.trim()
+  };
+}
+
+function applyOverrides(overrides) {
+  if (overrides.headline && heroTitleNode) {
+    heroTitleNode.textContent = overrides.headline;
+  }
+
+  if (overrides.tagline && heroTextNode) {
+    heroTextNode.textContent = overrides.tagline;
+  }
+
+  document.title = overrides.title || 'ClawDone';
+}
 
 function applyLanguage(language) {
   const resolvedLanguage = translations[language] ? language : 'zh-CN';
   const dictionary = translations[resolvedLanguage];
 
   document.documentElement.lang = resolvedLanguage;
-  document.title = resolvedLanguage === 'en' ? 'ClawDone' : 'ClawDone';
 
   translatableNodes.forEach((node) => {
     const key = node.dataset.i18n;
     if (dictionary[key]) node.textContent = dictionary[key];
   });
+
+  applyOverrides(getOverrides());
 
   languageButtons.forEach((button) => {
     button.classList.toggle('is-active', button.dataset.lang === resolvedLanguage);

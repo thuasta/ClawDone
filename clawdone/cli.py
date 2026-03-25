@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--ssh-retries", type=int, default=int(os.getenv("CLAWDONE_SSH_RETRIES", "0")), help="default SSH retry count for failed connections")
     serve_parser.add_argument("--ssh-retry-backoff-ms", type=int, default=int(os.getenv("CLAWDONE_SSH_RETRY_BACKOFF_MS", "250")), help="backoff delay between SSH retries in milliseconds")
     serve_parser.add_argument("--dashboard-workers", type=int, default=int(os.getenv("CLAWDONE_DASHBOARD_WORKERS", "6")), help="parallel workers used for dashboard target inspection")
+    serve_parser.add_argument("--dispatch-concurrency", type=int, default=int(os.getenv("CLAWDONE_DISPATCH_CONCURRENCY", "8")), help="max concurrent todo dispatches in autopilot loop")
     serve_parser.add_argument(
         "--risk-policy",
         default=os.getenv("CLAWDONE_RISK_POLICY", "confirm"),
@@ -63,6 +64,17 @@ def build_parser() -> argparse.ArgumentParser:
     capture_parser = subparsers.add_parser("capture", help="show recent output from a local tmux session")
     capture_parser.add_argument("--session", required=True, help="target tmux session")
     capture_parser.add_argument("--lines", type=int, default=120, help="number of pane lines to capture")
+
+    mcp_server_parser = subparsers.add_parser("mcp-server", help="start MCP server wrapping ClawDone HTTP API (stdio transport)")
+    mcp_server_parser.add_argument("--port", type=int, default=int(os.getenv("CLAWDONE_PORT", "8787")), help="ClawDone HTTP API port")
+    mcp_server_parser.add_argument("--api-host", default=os.getenv("CLAWDONE_HOST", "127.0.0.1"), help="ClawDone HTTP API host")
+    mcp_server_parser.add_argument("--token", default=os.getenv("CLAWDONE_TOKEN"), help="ClawDone bearer token")
+
+    mcp_agent_parser = subparsers.add_parser("mcp-agent", help="start MCP agent server wrapping local tmux")
+    mcp_agent_parser.add_argument("--http", action="store_true", help="serve over HTTP instead of stdio (for use with mcp_url on profiles)")
+    mcp_agent_parser.add_argument("--host", default="0.0.0.0", help="HTTP listen host (default 0.0.0.0)")
+    mcp_agent_parser.add_argument("--port", type=int, default=8788, help="HTTP listen port (default 8788)")
+
     return parser
 
 
@@ -94,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
                 "ssh_retries": args.ssh_retries,
                 "ssh_retry_backoff_ms": args.ssh_retry_backoff_ms,
                 "dashboard_workers": args.dashboard_workers,
+                "dispatch_concurrency": args.dispatch_concurrency,
                 "risk_policy": args.risk_policy,
                 "host_key_policy": args.host_key_policy,
                 "known_hosts_file": args.known_hosts_file,
@@ -127,8 +140,28 @@ def main(argv: list[str] | None = None) -> int:
         if args.subcommand == "capture":
             print(tmux.capture_pane(session=args.session, lines=args.lines))
             return 0
+
+        if args.subcommand == "mcp-server":
+            from .mcp_server import run_stdio as mcp_run_stdio
+            base_url = f"http://{args.api_host}:{args.port}"
+            import sys
+            print(f"ClawDone MCP server ready (connecting to {base_url})", file=sys.stderr)
+            mcp_run_stdio(base_url=base_url, token=args.token)
+            return 0
+
+        if args.subcommand == "mcp-agent":
+            from .mcp_agent_server import run_stdio as agent_run_stdio, run_http as agent_run_http
+            import sys
+            if args.http:
+                agent_run_http(host=args.host, port=args.port)
+            else:
+                print("ClawDone MCP agent server ready (wrapping local tmux)", file=sys.stderr)
+                agent_run_stdio()
+            return 0
+
     except (ValueError, RuntimeError) as exc:
         parser.exit(1, f"Error: {exc}\n")
 
     parser.exit(2, "unknown command\n")
     return 2
+

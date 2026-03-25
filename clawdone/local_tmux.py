@@ -55,7 +55,9 @@ class TmuxClient:
 
     def capture_pane(self, session: str, lines: int = 120) -> str:
         start = f"-{max(1, lines)}"
-        result = self._run("capture-pane", "-p", "-t", session, "-S", start)
+        # Join soft-wrapped terminal lines so machine-readable payloads (e.g. JSON)
+        # stay valid when emitted as a long single line.
+        result = self._run("capture-pane", "-p", "-J", "-t", session, "-S", start)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or f"failed to capture tmux pane for {session}")
         return result.stdout.rstrip()

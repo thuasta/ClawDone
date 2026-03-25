@@ -451,7 +451,9 @@ class RemoteTmuxClient:
 
     def capture_pane(self, profile: dict[str, Any], target: str, lines: int = 120) -> str:
         start = f"-{max(1, lines)}"
-        result = self.executor.run(profile, self._tmux_command(profile, "capture-pane", "-p", "-t", target, "-S", start))
+        # Join soft-wrapped terminal lines so machine-readable payloads (e.g. JSON)
+        # stay valid when emitted as a long single line.
+        result = self.executor.run(profile, self._tmux_command(profile, "capture-pane", "-p", "-J", "-t", target, "-S", start))
         if result["returncode"] != 0:
             raise RuntimeError(str(result.get("stderr", "")).strip() or f"failed to capture pane {target}")
         return str(result.get("stdout", "")).rstrip()
