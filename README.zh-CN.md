@@ -122,6 +122,28 @@ python -m clawdone serve \
   --risk-policy confirm
 ```
 
+## 微信桥接
+
+仓库现在自带了一个微信桥接子项目：[wechat-bridge](wechat-bridge/README.md)。
+
+它基于官方 iLink 通道版的 `wechat-ai`，可以做到：
+
+- 终端扫码登录微信
+- 接收受信微信用户的消息
+- 用和网页端相同的 `ClawDone API` 权限去调用后端
+- 把 pane 输出和执行结果回发到微信
+
+最短启动方式：
+
+```bash
+cd wechat-bridge
+cp config.example.json config.json
+npm install
+npm start -- --config ./config.json
+```
+
+完整说明、第一次接入流程、discovery 模式、微信命令列表和常见问题见 [wechat-bridge/README.md](wechat-bridge/README.md)。
+
 ## 基本使用流程
 
 ### 1. 新建 SSH Target

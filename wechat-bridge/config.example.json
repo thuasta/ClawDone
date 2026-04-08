@@ -1,0 +1,23 @@
+{
+  "clawdoneBaseUrl": "http://127.0.0.1:8787",
+  "clawdoneToken": "replace-with-the-same-role-token-you-use-in-the-web-ui",
+  "stateFile": "~/.clawdone/wechat-bridge-state.json",
+  "discoveryMode": false,
+  "weixin": {
+    "baseUrl": "https://ilinkai.weixin.qq.com"
+  },
+  "reply": {
+    "autoPollEnabled": true,
+    "autoPollIntervalMs": 4000,
+    "autoPollMaxRounds": 5,
+    "maxMessageChars": 1600,
+    "statusLines": 100
+  },
+  "users": {
+    "wxid_yourself": {
+      "name": "me",
+      "defaultProfile": "office",
+      "defaultTarget": "codex:0.0"
+    }
+  }
+}

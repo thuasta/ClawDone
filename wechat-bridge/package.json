@@ -1,0 +1,17 @@
+{
+  "name": "clawdone-wechat-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WeChat bridge for ClawDone using the official iLink-based wechat-ai channel",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/bridge.mjs",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "wechat-ai": "^0.5.0"
+  }
+}

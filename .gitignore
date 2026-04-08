@@ -6,7 +6,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .DS_Store
-pocketclaw.egg-info/
+*.egg-info/
+/package-lock.json
+node_modules/
+/wechat-bridge/config.json
 
-tests/ 
-.env
+tests/

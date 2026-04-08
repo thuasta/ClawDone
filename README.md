@@ -122,6 +122,28 @@ python -m clawdone serve \
   --risk-policy confirm
 ```
 
+## WeChat Bridge
+
+ClawDone now includes a repository-local WeChat bridge in [wechat-bridge](wechat-bridge/README.md).
+
+It uses the official iLink-based `wechat-ai` channel to:
+
+- log into WeChat by QR scan
+- receive messages from a trusted WeChat user
+- call the same ClawDone HTTP APIs that the web UI uses
+- send pane output and command results back to WeChat
+
+Quick setup:
+
+```bash
+cd wechat-bridge
+cp config.example.json config.json
+npm install
+npm start -- --config ./config.json
+```
+
+See [wechat-bridge/README.md](wechat-bridge/README.md) for the full first-run flow, discovery mode, chat commands, and troubleshooting notes.
+
 ## Basic Usage
 
 ### 1. Add an SSH target
